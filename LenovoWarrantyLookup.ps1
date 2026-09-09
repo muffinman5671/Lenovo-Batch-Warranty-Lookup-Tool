@@ -172,27 +172,23 @@ $mastSub.BackColor = [System.Drawing.Color]::Transparent
 $mastSub.Location  = New-Object System.Drawing.Point(29, 56)
 $mast.Controls.Add($mastSub)
 
-# Logo motif: offset bars in the two logo colours, echoing the mark.
-$mast.Add_Paint({
-    $g = $_.Graphics
-    $g.SmoothingMode = 'None'
-    $w = $mast.ClientSize.Width
+# Author credit, hugging the right edge of the masthead where the placeholder
+# mark used to sit. Repositioned on resize since the masthead stretches with
+# the window (Anchor alone won't hug the right edge for an AutoSize label).
+$mastCredit           = New-Object System.Windows.Forms.Label
+$mastCredit.Text      = 'CREATED BY AIDEN ORTEGA'
+$mastCredit.Font      = $fontSub
+$mastCredit.ForeColor = $magenta
+$mastCredit.AutoSize  = $true
+$mastCredit.BackColor = [System.Drawing.Color]::Transparent
+$mast.Controls.Add($mastCredit)
 
-    $bC = New-Object System.Drawing.SolidBrush($crimson)
-    $bM = New-Object System.Drawing.SolidBrush($magenta)
-    $bP = New-Object System.Drawing.SolidBrush($paper)
-
-    # A loose scatter of thick strokes on an implied grid, the way the mark is
-    # built: verticals and horizontals crossing, one small solid square adrift.
-    $g.FillRectangle($bM, ($w - 156), 16, 13, 34)   # vertical, magenta
-    $g.FillRectangle($bC, ($w - 138), 44, 34, 13)   # horizontal, crimson
-    $g.FillRectangle($bC, ($w - 100), 14, 13, 26)   # vertical, crimson
-    $g.FillRectangle($bM, ($w -  96), 50, 26, 13)   # horizontal, magenta
-    $g.FillRectangle($bM, ($w -  62), 22, 13, 22)   # vertical, magenta
-    $g.FillRectangle($bP, ($w -  40), 52, 11, 11)   # square, bone
-
-    $bC.Dispose(); $bM.Dispose(); $bP.Dispose()
-})
+$positionCredit = {
+    $mastCredit.Location = New-Object System.Drawing.Point(
+        ($mast.ClientSize.Width - $mastCredit.PreferredSize.Width - 26), 40)
+}
+$mast.Add_Resize($positionCredit)
+& $positionCredit
 
 # Crimson rule under the masthead.
 $mastRule           = New-Object System.Windows.Forms.Panel

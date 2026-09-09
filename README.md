@@ -61,6 +61,8 @@ Reading the grid: the **date** is crimson because it is the thing you came for,
 a device still under coverage gets a solid `ACTIVE` block, and anything that
 failed is magenta.
 
+Created by **Aiden Ortega**.
+
 ## Command line
 
 For scripted use or very large batches:
