@@ -1,0 +1,16 @@
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editors
+.vs/
+.vscode/
+*.swp
+*~
+
+# Local working files - serial lists and exported results stay off GitHub
+serials.txt
+*.local.txt
+Lenovo warranty *.csv
