@@ -69,7 +69,7 @@ the lookup rather than fixed. **All parts** shows the whole list.
 |---|---|
 | **Part no.** | The Lenovo FRU part number — what you order or quote |
 | **Description** | Lenovo's own wording for the part |
-| **Serviceable** | Who may fit it, as Lenovo grades it: `CRU T1` (customer, mandatory), `CRU T2` (customer, optional), `FRU only` (a technician), `Consumable` |
+| **Commodity** | The Lenovo group the part is filed under — handy on **All parts** |
 
 A commodity can hold more than one part when a machine was sold in several
 configurations — three LCD assemblies for touch, non-touch and WWAN, say —
@@ -80,8 +80,8 @@ dropdown re-filters it instantly.
 
 - **Copy part no.** — the part numbers in the grid, one per line. Select
   rows first to copy just those.
-- **Copy table** — serial, product, part number, description, commodity and
-  serviceable, tab separated with a header row.
+- **Copy table** — serial, product, part number, description and commodity,
+  tab separated with a header row.
 
 ## Look
 
