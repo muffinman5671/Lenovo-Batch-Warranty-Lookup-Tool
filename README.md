@@ -111,6 +111,13 @@ Created by **Aiden Ortega**.
 
 ## Command line
 
+These are PowerShell scripts. From a PowerShell window run them as shown
+below; from a plain Command Prompt, go through `powershell` instead:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\Lookup-Part.ps1" PF0ABCDE -Diagnose
+```
+
 For scripted use or very large batches:
 
 ```powershell
@@ -155,6 +162,7 @@ Get-LenovoWarranty PF0ABCDE, PF1FGHIJ | Format-Table
 | File | Purpose |
 |---|---|
 | `Lenovo Warranty Lookup.cmd` | Double-click launcher for the GUI |
+| `Lenovo Parts Diagnostics.cmd` | Double-click launcher for the part lookup diagnostic |
 | `LenovoWarrantyLookup.ps1` | The GUI |
 | `Lookup-Warranty.ps1` | Command line front end for warranty lookup |
 | `Lookup-Part.ps1` | Command line front end for part lookup |
@@ -229,11 +237,13 @@ Windows PowerShell 5.1 (built into Windows) and internet access to
   parts lists, but a part with an unusual description can be missed or an
   odd one included — **All parts** is always there as the backstop.
 - When a part lookup fails, the product card in the GUI shows what Lenovo
-  answered the first attempt, and `.\Lookup-Part.ps1 <serial> -Diagnose`
-  prints what every attempt got back, then scans the product's parts page
-  and the scripts it loads for the parts API the site itself calls. The
-  report is also saved next to the script as `Lenovo parts diagnostics
-  <date>.txt`. A valid serial coming back "not found" with a reply of `[]`
+  answered the first attempt. The **Diagnose** block (or
+  `.\Lookup-Part.ps1 <serial> -Diagnose`, or double-clicking
+  `Lenovo Parts Diagnostics.cmd`) writes a report with what every attempt
+  got back, then scans the product's parts page and the scripts it loads
+  for the parts API the site itself calls. The report lands next to the
+  script as `Lenovo parts diagnostics <date>.txt`; the GUI opens it in
+  Notepad. A valid serial coming back "not found" with a reply of `[]`
   means Lenovo's product resolver has no record of it; "Lenovo refused the
   parts list" means the export wants something the tool is not sending, and
   the scan is what shows what that is.

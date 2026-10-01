@@ -1265,6 +1265,47 @@ function Find-LenovoPartsEndpoint {
 }
 
 
+function Get-LenovoPartsDiagnostic {
+    <#
+    .SYNOPSIS
+        Builds the diagnostic report for one serial: what each download
+        attempt got back, then the scan of the parts page and its scripts.
+
+    .DESCRIPTION
+        Returns lines of text. Pass -PartsList to reuse a result already in
+        hand rather than downloading again. Both the GUI's DIAGNOSE block and
+        Lookup-Part.ps1 -Diagnose print and save exactly this.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)] [string] $SerialNumber,
+        $PartsList
+    )
+
+    $serial = $SerialNumber.Trim().ToUpperInvariant()
+    if (-not $PartsList -or $PartsList.Serial -ne $serial) {
+        $PartsList = Get-LenovoPartsList -SerialNumber $serial
+    }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    [void]$lines.Add("Lenovo part lookup diagnostics - $(Get-Date -Format 'yyyy-MM-dd HH:mm') - PowerShell $($PSVersionTable.PSVersion)")
+    [void]$lines.Add("Serial: $serial")
+    if ($PartsList.Error) {
+        [void]$lines.Add("Result: $($PartsList.Error)")
+    } else {
+        [void]$lines.Add("Result: OK - $($PartsList.Parts.Count) parts via $($PartsList.Source) for $($PartsList.Product)")
+    }
+    if ($PartsList.Raw) {
+        [void]$lines.Add('What each attempt got back:')
+        foreach ($l in ([string]$PartsList.Raw -split "`n")) { [void]$lines.Add("  $l") }
+    }
+    [void]$lines.Add('Scan of the parts page and its scripts:')
+    foreach ($l in (Find-LenovoPartsEndpoint -SerialNumber $serial)) { [void]$lines.Add("  $l") }
+
+    return $lines.ToArray()
+}
+
+
 function Find-LenovoPart {
     <#
     .SYNOPSIS
@@ -1306,4 +1347,4 @@ Export-ModuleMember -Function Get-LenovoWarranty, ConvertTo-SerialList,
                               ConvertTo-LenovoPartRows, ConvertFrom-LenovoXlsx,
                               ConvertFrom-LenovoDelimited, ConvertFrom-LenovoPartsJson,
                               ConvertFrom-LenovoJsonList, Read-LenovoPartsPayload,
-                              Find-LenovoPartsEndpoint
+                              Find-LenovoPartsEndpoint, Get-LenovoPartsDiagnostic

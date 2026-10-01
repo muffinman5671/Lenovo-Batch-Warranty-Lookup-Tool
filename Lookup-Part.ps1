@@ -85,18 +85,7 @@ Write-Verbose "Looking up '$Part' for $($serial[0])."
 $result = Find-LenovoPart -SerialNumber $serial[0] -Part $Part
 
 if ($Diagnose) {
-    $report = New-Object System.Collections.Generic.List[string]
-    [void]$report.Add("Lenovo part lookup diagnostics - $(Get-Date -Format 'yyyy-MM-dd HH:mm') - PowerShell $($PSVersionTable.PSVersion)")
-    [void]$report.Add("Serial: $($result.Serial)")
-    if ($result.Error) { [void]$report.Add("Result: $($result.Error)") }
-    else { [void]$report.Add("Result: OK - $($result.Parts.Count) parts via $($result.Source) for $($result.Product)") }
-    if ($result.Raw) {
-        [void]$report.Add('What each attempt got back:')
-        foreach ($l in ($result.Raw -split "`n")) { [void]$report.Add("  $l") }
-    }
-    [void]$report.Add('Scan of the parts page and its scripts:')
-    foreach ($l in (Find-LenovoPartsEndpoint -SerialNumber $result.Serial)) { [void]$report.Add("  $l") }
-
+    $report     = @(Get-LenovoPartsDiagnostic -SerialNumber $result.Serial -PartsList $result)
     $reportPath = Join-Path $PSScriptRoot "Lenovo parts diagnostics $(Get-Date -Format 'yyyy-MM-dd').txt"
     $report | Set-Content -LiteralPath $reportPath -Encoding UTF8
     $report | ForEach-Object { Write-Host $_ }
