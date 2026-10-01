@@ -5,6 +5,10 @@
     Paste a batch of Lenovo serial numbers, get back the main device warranty
     end date for each one, in the same order, ready to paste into Excel.
 
+    The PARTS tab in the masthead switches to a second section: type one
+    serial, pick a part from the preset list (LCD back cover, SSD, system
+    board, ...) and it returns the Lenovo part number(s) for that machine.
+
     Launch it with "Lenovo Warranty Lookup.cmd", or run this file directly with
     powershell -ExecutionPolicy Bypass -File .\LenovoWarrantyLookup.ps1
 
@@ -115,6 +119,61 @@ function New-BrutalButton {
     return $b
 }
 
+function New-BrutalGrid {
+    <#
+        A results grid in the house style: navy header block, hard single
+        rules, bone zebra rows, magenta selection. Columns come in as
+        @{ N = name; H = header; W = width } and one of them can stretch.
+    #>
+    param([object[]] $Columns, [string] $FillColumn)
+
+    $g                           = New-Object System.Windows.Forms.DataGridView
+    $g.Dock                      = 'Fill'
+    $g.ReadOnly                  = $true
+    $g.AllowUserToAddRows        = $false
+    $g.AllowUserToDeleteRows     = $false
+    $g.AllowUserToResizeRows     = $false
+    $g.RowHeadersVisible         = $false
+    $g.SelectionMode             = 'FullRowSelect'
+    $g.MultiSelect               = $true
+    $g.BorderStyle               = 'None'
+    $g.BackgroundColor           = $paper
+    $g.GridColor                 = $navy
+    $g.CellBorderStyle           = 'Single'
+    $g.ColumnHeadersBorderStyle  = 'Single'
+    $g.EnableHeadersVisualStyles = $false
+    $g.ColumnHeadersHeightSizeMode = 'DisableResizing'
+    $g.ColumnHeadersHeight       = 34
+    $g.RowTemplate.Height        = 27
+
+    $g.ColumnHeadersDefaultCellStyle.BackColor = $navy
+    $g.ColumnHeadersDefaultCellStyle.ForeColor = $paper
+    $g.ColumnHeadersDefaultCellStyle.Font      = $fontHead
+    $g.ColumnHeadersDefaultCellStyle.SelectionBackColor = $navy
+    $g.ColumnHeadersDefaultCellStyle.SelectionForeColor = $paper
+    $g.ColumnHeadersDefaultCellStyle.Padding   = New-Object System.Windows.Forms.Padding(6, 0, 0, 0)
+
+    $g.DefaultCellStyle.Font               = $fontMono
+    $g.DefaultCellStyle.ForeColor          = $navy
+    $g.DefaultCellStyle.BackColor          = $paper
+    $g.DefaultCellStyle.SelectionBackColor = $magenta
+    $g.DefaultCellStyle.SelectionForeColor = $paper
+    $g.DefaultCellStyle.Padding            = New-Object System.Windows.Forms.Padding(6, 0, 0, 0)
+    $g.AlternatingRowsDefaultCellStyle.BackColor = $bone
+    $g.AlternatingRowsDefaultCellStyle.SelectionBackColor = $magenta
+
+    foreach ($spec in $Columns) {
+        $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $col.Name       = $spec.N
+        $col.HeaderText = $spec.H
+        $col.Width      = $spec.W
+        [void]$g.Columns.Add($col)
+    }
+    if ($FillColumn) { $g.Columns[$FillColumn].AutoSizeMode = 'Fill' }
+
+    return $g
+}
+
 function Set-BlockEnabled {
     <#  Flat buttons ignore their own disabled styling, so drive it by hand. #>
     param($Button, [bool] $On)
@@ -190,6 +249,33 @@ $positionCredit = {
 $mast.Add_Resize($positionCredit)
 & $positionCredit
 
+# Section switch, sitting between the title and the credit. Two blocks in
+# the masthead's own ink: the live one is knocked out to paper.
+function New-ModeTab {
+    param([string] $Text, [int] $X, [int] $Width)
+
+    $b           = New-Object System.Windows.Forms.Button
+    $b.Text      = $Text
+    $b.Location  = New-Object System.Drawing.Point($X, 28)
+    $b.Size      = New-Object System.Drawing.Size($Width, 36)
+    $b.FlatStyle = 'Flat'
+    $b.Font      = $fontBtn
+    $b.BackColor = $navy
+    $b.ForeColor = $paper
+    $b.Cursor    = [System.Windows.Forms.Cursors]::Hand
+    $b.TabStop   = $false
+    $b.FlatAppearance.BorderSize  = $BORDER
+    $b.FlatAppearance.BorderColor = $paper
+    $b.FlatAppearance.MouseOverBackColor = $magenta
+    $b.FlatAppearance.MouseDownBackColor = $crimson
+    return $b
+}
+
+$tabWarranty = New-ModeTab -Text 'WARRANTY' -X 420 -Width 132
+$tabParts    = New-ModeTab -Text 'PARTS'    -X 566 -Width 110
+$mast.Controls.Add($tabWarranty)
+$mast.Controls.Add($tabParts)
+
 # Crimson rule under the masthead.
 $mastRule           = New-Object System.Windows.Forms.Panel
 $mastRule.Location  = New-Object System.Drawing.Point(0, 92)
@@ -258,56 +344,14 @@ $split.Panel2.Controls.Add($lblOut)
 $gridBox = New-BorderBox -X 0 -Y 24 -W 796 -H 468 -Anchor 'Top,Left,Right,Bottom'
 $split.Panel2.Controls.Add($gridBox)
 
-$grid                           = New-Object System.Windows.Forms.DataGridView
-$grid.Dock                      = 'Fill'
-$grid.ReadOnly                  = $true
-$grid.AllowUserToAddRows        = $false
-$grid.AllowUserToDeleteRows     = $false
-$grid.AllowUserToResizeRows     = $false
-$grid.RowHeadersVisible         = $false
-$grid.SelectionMode             = 'FullRowSelect'
-$grid.MultiSelect               = $true
-$grid.BorderStyle               = 'None'
-$grid.BackgroundColor           = $paper
-$grid.GridColor                 = $navy
-$grid.CellBorderStyle           = 'Single'
-$grid.ColumnHeadersBorderStyle  = 'Single'
-$grid.EnableHeadersVisualStyles = $false
-$grid.ColumnHeadersHeightSizeMode = 'DisableResizing'
-$grid.ColumnHeadersHeight       = 34
-$grid.RowTemplate.Height        = 27
-
-$grid.ColumnHeadersDefaultCellStyle.BackColor = $navy
-$grid.ColumnHeadersDefaultCellStyle.ForeColor = $paper
-$grid.ColumnHeadersDefaultCellStyle.Font      = $fontHead
-$grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = $navy
-$grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = $paper
-$grid.ColumnHeadersDefaultCellStyle.Padding   = New-Object System.Windows.Forms.Padding(6, 0, 0, 0)
-
-$grid.DefaultCellStyle.Font               = $fontMono
-$grid.DefaultCellStyle.ForeColor          = $navy
-$grid.DefaultCellStyle.BackColor          = $paper
-$grid.DefaultCellStyle.SelectionBackColor = $magenta
-$grid.DefaultCellStyle.SelectionForeColor = $paper
-$grid.DefaultCellStyle.Padding            = New-Object System.Windows.Forms.Padding(6, 0, 0, 0)
-$grid.AlternatingRowsDefaultCellStyle.BackColor = $bone
-$grid.AlternatingRowsDefaultCellStyle.SelectionBackColor = $magenta
-$gridBox.Controls.Add($grid)
-
-foreach ($spec in @(
+$grid = New-BrutalGrid -FillColumn 'Product' -Columns @(
     @{ N = 'Serial';      H = 'SERIAL';   W = 112 },
     @{ N = 'WarrantyEnd'; H = 'ENDS';     W = 114 },
     @{ N = 'Status';      H = 'STATUS';   W = 92  },
     @{ N = 'Product';     H = 'PRODUCT';  W = 240 },
     @{ N = 'Note';        H = 'COVERAGE'; W = 190 }
-)) {
-    $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $col.Name       = $spec.N
-    $col.HeaderText = $spec.H
-    $col.Width      = $spec.W
-    [void]$grid.Columns.Add($col)
-}
-$grid.Columns['Product'].AutoSizeMode = 'Fill'
+)
+$gridBox.Controls.Add($grid)
 
 
 # --------------------------------------------------------------------------
@@ -393,6 +437,161 @@ $bar.Controls.Add($status)
 
 
 # --------------------------------------------------------------------------
+#  Parts section - one serial, one part, its part number(s)
+#
+#  Sits exactly where the warranty split and bar sit and is swapped in by
+#  the PARTS tab. Inputs down the left, part numbers on the right.
+# --------------------------------------------------------------------------
+$partsPanel           = New-Object System.Windows.Forms.Panel
+$partsPanel.Location  = New-Object System.Drawing.Point(22, 120)
+$partsPanel.Size      = New-Object System.Drawing.Size(1064, 520)
+$partsPanel.Anchor    = 'Top,Left,Right,Bottom'
+$partsPanel.BackColor = $bone
+$partsPanel.Visible   = $false
+$form.Controls.Add($partsPanel)
+
+$PCOL = 300    # width of the input column
+
+# ---- serial ----
+$lblPSerial           = New-Object System.Windows.Forms.Label
+$lblPSerial.Text      = 'SERIAL NUMBER'
+$lblPSerial.Font      = $fontLabel
+$lblPSerial.ForeColor = $navy
+$lblPSerial.AutoSize  = $true
+$lblPSerial.Location  = New-Object System.Drawing.Point(0, 0)
+$partsPanel.Controls.Add($lblPSerial)
+
+$pSerialBox = New-BorderBox -X 0 -Y 24 -W $PCOL -H 30
+$partsPanel.Controls.Add($pSerialBox)
+
+# Multiline so it fills its rule box; Enter is caught below and runs the
+# lookup instead of adding a line.
+$txtPSerial                = New-Object System.Windows.Forms.TextBox
+$txtPSerial.Multiline      = $true
+$txtPSerial.WordWrap       = $false
+$txtPSerial.BorderStyle    = 'None'
+$txtPSerial.Font           = $fontLabel
+$txtPSerial.BackColor      = $paper
+$txtPSerial.ForeColor      = $navy
+$txtPSerial.CharacterCasing = 'Upper'
+$txtPSerial.Dock           = 'Fill'
+$pSerialBox.Controls.Add($txtPSerial)
+
+# ---- part ----
+$lblPPart           = New-Object System.Windows.Forms.Label
+$lblPPart.Text      = 'PART'
+$lblPPart.Font      = $fontLabel
+$lblPPart.ForeColor = $navy
+$lblPPart.AutoSize  = $true
+$lblPPart.Location  = New-Object System.Drawing.Point(0, 70)
+$partsPanel.Controls.Add($lblPPart)
+
+$pPartBox = New-BorderBox -X 0 -Y 94 -W $PCOL -H 30
+$partsPanel.Controls.Add($pPartBox)
+
+# The preset list comes from the module so the GUI and the command line
+# always agree on what can be asked for.
+$script:PartCategoryNames = @(Get-LenovoPartCategory | ForEach-Object { $_.Name })
+
+$cboPart                = New-Object System.Windows.Forms.ComboBox
+$cboPart.DropDownStyle  = 'DropDownList'
+$cboPart.FlatStyle      = 'Flat'
+$cboPart.Font           = $fontBtn
+$cboPart.BackColor      = $paper
+$cboPart.ForeColor      = $navy
+$cboPart.Dock           = 'Fill'
+$cboPart.MaxDropDownItems = 16
+[void]$cboPart.Items.Add('ALL PARTS')
+foreach ($n in $script:PartCategoryNames) { [void]$cboPart.Items.Add($n.ToUpperInvariant()) }
+$cboPart.SelectedIndex  = 0
+$pPartBox.Controls.Add($cboPart)
+
+# ---- product card ----
+$lblPProduct           = New-Object System.Windows.Forms.Label
+$lblPProduct.Text      = 'PRODUCT'
+$lblPProduct.Font      = $fontLabel
+$lblPProduct.ForeColor = $navy
+$lblPProduct.AutoSize  = $true
+$lblPProduct.Location  = New-Object System.Drawing.Point(0, 140)
+$partsPanel.Controls.Add($lblPProduct)
+
+$pProductBox = New-BorderBox -X 0 -Y 164 -W $PCOL -H 128
+$partsPanel.Controls.Add($pProductBox)
+
+$lblPInfo           = New-Object System.Windows.Forms.Label
+$lblPInfo.Text      = ''
+$lblPInfo.Font      = $fontSub
+$lblPInfo.ForeColor = $navy
+$lblPInfo.BackColor = $paper
+$lblPInfo.AutoSize  = $false
+$lblPInfo.Dock      = 'Fill'
+$lblPInfo.Padding   = New-Object System.Windows.Forms.Padding(8, 6, 8, 6)
+$lblPInfo.TextAlign = 'TopLeft'
+$pProductBox.Controls.Add($lblPInfo)
+
+$lblPHint           = New-Object System.Windows.Forms.Label
+$lblPHint.Text      = "TYPE A SERIAL, PICK A PART, PRESS ENTER.`r`n`r`n" +
+                      "MATCHES GO BY LENOVO'S OWN WORDING -`r`n" +
+                      "READ THE DESCRIPTION BEFORE ORDERING.`r`n`r`n" +
+                      "ALL PARTS SHOWS THE WHOLE LIST."
+$lblPHint.Font      = $fontSub
+$lblPHint.ForeColor = $navy
+$lblPHint.AutoSize  = $true
+$lblPHint.Location  = New-Object System.Drawing.Point(0, 306)
+$partsPanel.Controls.Add($lblPHint)
+
+# ---- part numbers ----
+$lblPOut           = New-Object System.Windows.Forms.Label
+$lblPOut.Text      = 'PART NUMBERS'
+$lblPOut.Font      = $fontLabel
+$lblPOut.ForeColor = $navy
+$lblPOut.AutoSize  = $true
+$lblPOut.Location  = New-Object System.Drawing.Point(($PCOL + 24), 0)
+$partsPanel.Controls.Add($lblPOut)
+
+$pGridBox = New-BorderBox -X ($PCOL + 24) -Y 24 -W (1064 - $PCOL - 24) -H 496 -Anchor 'Top,Left,Right,Bottom'
+$partsPanel.Controls.Add($pGridBox)
+
+$pgrid = New-BrutalGrid -FillColumn 'Description' -Columns @(
+    @{ N = 'PartNumber';  H = 'PART NO.';    W = 132 },
+    @{ N = 'Description'; H = 'DESCRIPTION'; W = 240 },
+    @{ N = 'Commodity';   H = 'COMMODITY';   W = 150 },
+    @{ N = 'Status';      H = 'STATUS';      W = 104 },
+    @{ N = 'Substitutes'; H = 'SUBSTITUTES'; W = 120 }
+)
+$pGridBox.Controls.Add($pgrid)
+
+# ---- parts control bar, over the top of the warranty one ----
+$pbar           = New-Object System.Windows.Forms.Panel
+$pbar.Location  = New-Object System.Drawing.Point(22, 662)
+$pbar.Size      = New-Object System.Drawing.Size(1064, 58)
+$pbar.Anchor    = 'Left,Right,Bottom'
+$pbar.BackColor = $bone
+$pbar.Visible   = $false
+$form.Controls.Add($pbar)
+
+$btnFind       = New-BrutalButton -Text 'FIND PART'     -X 0   -Width 132 -Fill $crimson -Ink $paper
+$btnCopyPart   = New-BrutalButton -Text 'COPY PART NO.' -X 146 -Width 152 -Fill $magenta -Ink $paper
+$btnCopyPTable = New-BrutalButton -Text 'COPY TABLE'    -X 312 -Width 132 -Fill $paper   -Ink $navy
+$btnPClear     = New-BrutalButton -Text 'CLEAR'         -X 458 -Width  94 -Fill $paper   -Ink $navy
+
+foreach ($b in @($btnFind, $btnCopyPart, $btnCopyPTable, $btnPClear)) {
+    $pbar.Controls.Add($b.Tag.Shadow)
+    $pbar.Controls.Add($b)
+    $b.BringToFront()
+}
+
+$pstatus           = New-Object System.Windows.Forms.Label
+$pstatus.Text      = 'READY'
+$pstatus.Font      = $fontLabel
+$pstatus.ForeColor = $navy
+$pstatus.AutoSize  = $true
+$pstatus.Location  = New-Object System.Drawing.Point(896, 20)
+$pstatus.Anchor    = 'Right,Bottom'
+$pbar.Controls.Add($pstatus)
+
+
+# --------------------------------------------------------------------------
 #  Behaviour
 # --------------------------------------------------------------------------
 $script:Results = @()
@@ -405,10 +604,11 @@ function Update-InputCount {
 }
 
 function Set-Status {
-    param([string]$Text, [System.Drawing.Color]$Color = $navy)
-    $status.Text      = $Text.ToUpperInvariant()
-    $status.ForeColor = $Color
-    $status.Visible   = $true
+    <#  Writes to the warranty bar unless told which status label to use. #>
+    param([string]$Text, [System.Drawing.Color]$Color = $navy, $Target = $status)
+    $Target.Text      = $Text.ToUpperInvariant()
+    $Target.ForeColor = $Color
+    $Target.Visible   = $true
 }
 
 function Set-Progress {
@@ -492,23 +692,23 @@ function Copy-ToClipboardSafe {
         remote session can make the first attempt fail. Retry briefly instead
         of throwing a wall of red at the user.
     #>
-    param([string]$Text, [string]$Label)
+    param([string]$Text, [string]$Label, $Target = $status)
 
     if ([string]::IsNullOrEmpty($Text)) {
-        Set-Status 'NOTHING TO COPY' $magenta
+        Set-Status 'NOTHING TO COPY' $magenta -Target $Target
         return
     }
 
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
             [System.Windows.Forms.Clipboard]::SetText($Text)
-            Set-Status "$Label COPIED" $crimson
+            Set-Status "$Label COPIED" $crimson -Target $Target
             return
         } catch {
             Start-Sleep -Milliseconds 120
         }
     }
-    Set-Status 'CLIPBOARD BLOCKED' $magenta
+    Set-Status 'CLIPBOARD BLOCKED' $magenta -Target $Target
 }
 
 function Invoke-Lookup {
@@ -563,9 +763,174 @@ function Invoke-Lookup {
 }
 
 
+# ---- parts section ----
+$script:PartsList   = $null    # last Get-LenovoPartsList result, one serial
+$script:PartMatches = @()      # rows currently in the parts grid
+
+function Get-SelectedPartCategory {
+    if ($cboPart.SelectedIndex -le 0) { return 'All parts' }
+    return $script:PartCategoryNames[$cboPart.SelectedIndex - 1]
+}
+
+function Update-PartInfo {
+    <#  The product card: what the serial resolved to, or why it did not. #>
+    if (-not $script:PartsList) {
+        $lblPInfo.Text = ''
+        return
+    }
+    $r = $script:PartsList
+    if ($r.Error) {
+        $lblPInfo.ForeColor = $magenta
+        $lblPInfo.Text      = "$($r.Serial)`r`n`r`n$($r.Error.ToUpperInvariant())"
+        return
+    }
+    $lblPInfo.ForeColor = $navy
+    $lblPInfo.Text      = "$($r.Product)`r`n`r`nTYPE $($r.MachineType)   MODEL $($r.Model)`r`n$($r.Parts.Count) PARTS LISTED"
+}
+
+function Update-PartGrid {
+    <#  Filters the cached parts list by the chosen preset and repaints. #>
+    $cat = Get-SelectedPartCategory
+
+    $script:PartMatches = @()
+    if ($script:PartsList -and -not $script:PartsList.Error) {
+        $script:PartMatches = @(Select-LenovoPart -Part $script:PartsList.Parts -Category $cat)
+    }
+
+    $pgrid.SuspendLayout()
+    $pgrid.Rows.Clear()
+    foreach ($p in $script:PartMatches) {
+        $statusText = $p.Status.ToUpperInvariant()
+        $idx = $pgrid.Rows.Add($p.PartNumber, $p.Description, $p.Commodity, $statusText, $p.Substitutes)
+        $row = $pgrid.Rows[$idx]
+
+        # The part number is what you came for, so it gets the loud colour.
+        $row.Cells['PartNumber'].Style.Font      = $fontLabel
+        $row.Cells['PartNumber'].Style.ForeColor = $crimson
+
+        if ($statusText -match 'UNAVAIL|NOT AVAIL|DISCONTIN|NO LONGER|OBSOLETE|END OF LIFE|\bEOL\b') {
+            $row.Cells['Status'].Style.ForeColor = $magenta
+            $row.Cells['Status'].Style.Font      = $fontLabel
+        }
+    }
+    $pgrid.ResumeLayout()
+    $pgrid.ClearSelection()
+
+    Update-PartInfo
+
+    $have = $script:PartMatches.Count -gt 0
+    foreach ($b in @($btnCopyPart, $btnCopyPTable)) { Set-BlockEnabled $b $have }
+
+    if (-not $script:PartsList) { return }
+    if ($script:PartsList.Error) {
+        Set-Status $script:PartsList.Error $magenta -Target $pstatus
+        return
+    }
+
+    $n = $script:PartMatches.Count
+    if ($cat -eq 'All parts') {
+        Set-Status "$n PARTS LISTED" $crimson -Target $pstatus
+    } elseif ($have) {
+        $word = if ($n -eq 1) { 'MATCH' } else { 'MATCHES' }
+        Set-Status "$n $word FOR $cat" $crimson -Target $pstatus
+    } else {
+        Set-Status "NO $cat LISTED - TRY ALL PARTS" $magenta -Target $pstatus
+    }
+}
+
+function Invoke-PartLookup {
+    $serials = @(ConvertTo-SerialList -Text $txtPSerial.Text)
+    if ($serials.Count -eq 0) {
+        Set-Status 'ENTER A SERIAL FIRST' $magenta -Target $pstatus
+        return
+    }
+    $serial = $serials[0]
+    if ($serials.Count -gt 1) { $txtPSerial.Text = $serial }   # one machine at a time here
+
+    # The list is per serial, so asking for another part on the same serial
+    # is a re-filter of what was already downloaded, not another round trip.
+    if ($script:PartsList -and $script:PartsList.Serial -eq $serial -and -not $script:PartsList.Error) {
+        Update-PartGrid
+        return
+    }
+
+    foreach ($b in @($btnFind, $btnPClear, $btnCopyPart, $btnCopyPTable)) { Set-BlockEnabled $b $false }
+    Set-Status 'LOOKING UP' $navy -Target $pstatus
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    [System.Windows.Forms.Application]::DoEvents()
+
+    try {
+        $script:PartsList = Get-LenovoPartsList -SerialNumber $serial
+        Update-PartGrid
+    } catch {
+        $script:PartsList = $null
+        $pgrid.Rows.Clear()
+        Set-Status "FAILED: $($_.Exception.Message)" $magenta -Target $pstatus
+    } finally {
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        Set-BlockEnabled $btnFind   $true
+        Set-BlockEnabled $btnPClear $true
+    }
+}
+
+function Get-PartNumbersText {
+    <#  Selected rows if any are picked, otherwise every match - one per line. #>
+    $picked = @($pgrid.SelectedRows | Sort-Object Index)
+    $nums = if ($picked.Count -gt 0) {
+        $picked | ForEach-Object { [string]$_.Cells['PartNumber'].Value }
+    } else {
+        $script:PartMatches | ForEach-Object { $_.PartNumber }
+    }
+    return (@($nums) -join "`r`n")
+}
+
+function Get-PartTableText {
+    <#  Every match with the serial and product it belongs to, for Excel. #>
+    if (-not $script:PartsList) { return '' }
+    $lines = New-Object System.Collections.Generic.List[string]
+    [void]$lines.Add("Serial`tProduct`tPart Number`tDescription`tCommodity`tStatus`tSubstitutes")
+    foreach ($p in $script:PartMatches) {
+        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f
+            $script:PartsList.Serial, $script:PartsList.Product,
+            $p.PartNumber, $p.Description, $p.Commodity, $p.Status, $p.Substitutes))
+    }
+    return ($lines -join "`r`n")
+}
+
+function Set-Mode {
+    <#  Swaps the warranty and parts sections and restyles the masthead tabs. #>
+    param([ValidateSet('Warranty', 'Parts')] [string] $Mode)
+
+    $parts = ($Mode -eq 'Parts')
+    $split.Visible      = -not $parts
+    $bar.Visible        = -not $parts
+    $partsPanel.Visible = $parts
+    $pbar.Visible       = $parts
+
+    foreach ($pair in @(@($tabWarranty, (-not $parts)), @($tabParts, $parts))) {
+        $tab = $pair[0]
+        if ($pair[1]) { $tab.BackColor = $paper; $tab.ForeColor = $navy }
+        else          { $tab.BackColor = $navy;  $tab.ForeColor = $paper }
+    }
+
+    if ($parts) {
+        $mastTitle.Text = 'PART LOOKUP'
+        $mastSub.Text   = 'LENOVO // ONE SERIAL // FRU PART NUMBERS'
+        $txtPSerial.Focus()
+    } else {
+        $mastTitle.Text = 'WARRANTY LOOKUP'
+        $mastSub.Text   = 'LENOVO // BATCH // MAIN DEVICE WARRANTY ONLY'
+        $txtIn.Focus()
+    }
+}
+
+
 # --------------------------------------------------------------------------
 #  Wiring
 # --------------------------------------------------------------------------
+$tabWarranty.Add_Click({ Set-Mode 'Warranty' })
+$tabParts.Add_Click({ Set-Mode 'Parts' })
+
 $txtIn.Add_TextChanged({ Update-InputCount })
 
 $btnLookup.Add_Click({ Invoke-Lookup })
@@ -622,9 +987,45 @@ $txtIn.Add_KeyDown({
     }
 })
 
+# ---- parts section ----
+$btnFind.Add_Click({ Invoke-PartLookup })
+
+$btnCopyPart.Add_Click({
+    $label = if (@($pgrid.SelectedRows).Count -eq 1 -or $script:PartMatches.Count -eq 1) { 'PART NO.' } else { 'PART NOS.' }
+    Copy-ToClipboardSafe -Text (Get-PartNumbersText) -Label $label -Target $pstatus
+})
+
+$btnCopyPTable.Add_Click({ Copy-ToClipboardSafe -Text (Get-PartTableText) -Label 'TABLE' -Target $pstatus })
+
+$btnPClear.Add_Click({
+    $txtPSerial.Clear()
+    $pgrid.Rows.Clear()
+    $script:PartsList   = $null
+    $script:PartMatches = @()
+    Update-PartInfo
+    foreach ($b in @($btnCopyPart, $btnCopyPTable)) { Set-BlockEnabled $b $false }
+    Set-Status 'READY' $navy -Target $pstatus
+    $txtPSerial.Focus()
+})
+
+# Changing the part re-filters the list already downloaded for that serial.
+$cboPart.Add_SelectedIndexChanged({
+    if (-not $script:PartsList -or $script:PartsList.Error) { return }
+    $typed = @(ConvertTo-SerialList -Text $txtPSerial.Text)
+    if ($typed.Count -ge 1 -and $typed[0] -eq $script:PartsList.Serial) { Update-PartGrid }
+})
+
+# Enter (or Ctrl+Enter) in the serial box runs the lookup.
+$txtPSerial.Add_KeyDown({
+    if ($_.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
+        $_.SuppressKeyPress = $true
+        Invoke-PartLookup
+    }
+})
+
 $form.Add_Shown({
-    foreach ($b in @($btnCopyDates, $btnCopyTable, $btnSaveCsv)) { Set-BlockEnabled $b $false }
-    $txtIn.Focus()
+    foreach ($b in @($btnCopyDates, $btnCopyTable, $btnSaveCsv, $btnCopyPart, $btnCopyPTable)) { Set-BlockEnabled $b $false }
+    Set-Mode 'Warranty'
 })
 
 [void]$form.ShowDialog()

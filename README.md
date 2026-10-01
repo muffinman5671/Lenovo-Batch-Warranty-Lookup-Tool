@@ -4,6 +4,10 @@ Paste a batch of Lenovo serial numbers, get back the **main device warranty end
 date** for each one — in the same order you entered them, ready to paste
 straight into Excel.
 
+A second section, **PARTS**, takes one serial number and a part picked from a
+preset list (LCD back cover, SSD, system board, ...) and returns the Lenovo
+**part number(s)** for that exact machine.
+
 Built as a replacement for Lenovo's own
 [batch warranty lookup](https://pcsupport.lenovo.com/us/en/warrantylookup/batchquery),
 which requires building an upload file, returns results in its own order, and
@@ -16,6 +20,13 @@ Double-click **`Lenovo Warranty Lookup.cmd`**.
 1. Paste your serials into the left box, one per line.
 2. Click **Look up warranties** (or press `Ctrl+Enter`).
 3. Click **Copy dates** and paste into your spreadsheet.
+
+For a part number, click **PARTS** in the masthead:
+
+1. Type the serial number.
+2. Pick the part from the dropdown.
+3. Press `Enter` (or click **Find part**). The part number(s) land in the
+   grid; **Copy part no.** puts them on the clipboard.
 
 ## What it returns
 
@@ -43,6 +54,41 @@ coverage actually runs out.
 Date format is selectable: `MM/dd/yyyy` (default), `yyyy-MM-dd`, `dd/MM/yyyy`,
 `M/d/yyyy`. Changing it re-renders the results instantly — no need to look
 anything up again.
+
+## Part lookup
+
+The **PARTS** section answers "what is the part number for the X on this
+machine?". It pulls the full FRU parts list Lenovo keeps for that serial and
+keeps the rows that match the part you picked.
+
+| Field | What it is |
+|---|---|
+| **Part no.** | The Lenovo FRU part number — what you order or quote |
+| **Description** | Lenovo's own wording for the part |
+| **Commodity** | Lenovo's part family (covers, system boards, storage, ...) |
+| **Status** | Availability as Lenovo reports it; unavailable parts show magenta |
+| **Substitutes** | Replacement part numbers, when Lenovo lists any |
+
+The preset list: LCD panel, LCD back cover, LCD bezel, LCD cable, hinges,
+system board, power button board, I/O board, SSD, hard drive, memory,
+battery, AC adapter, power cord, keyboard, palmrest / C cover, base cover /
+D cover, touchpad, fingerprint reader, fan / heatsink, wireless card, antenna,
+camera, speakers, screws — plus **All parts** for the whole list.
+
+Matching goes by Lenovo's wording. Each preset has a pattern it looks for
+(`PLANAR` and `SYSTEM BOARD` both count as a system board) and a pattern it
+rules out (a `Bracket, SSD` is not an SSD). A part can match more than once
+when a machine was sold in several configurations — three LCD back covers for
+touch, non-touch and WWAN, say — so **read the description before ordering**.
+If the preset you picked finds nothing, switch to **All parts** and scan.
+
+The parts list is downloaded once per serial; changing the part in the
+dropdown re-filters it instantly.
+
+- **Copy part no.** — the part numbers in the grid, one per line. Select
+  rows first to copy just those.
+- **Copy table** — serial, product, part number, description, commodity,
+  status and substitutes, tab separated with a header row.
 
 ## Look
 
@@ -78,11 +124,30 @@ For scripted use or very large batches:
 .\Lookup-Warranty.ps1 -Path .\serials.txt -CsvPath .\warranty.csv
 ```
 
+Part lookup has its own front end:
+
+```powershell
+# Part numbers for one part on one machine
+.\Lookup-Part.ps1 PF0ABCDE 'System board'
+
+# Just the part number(s), onto the clipboard
+.\Lookup-Part.ps1 PF0ABCDE -Part SSD -PartNumbersOnly | Set-Clipboard
+
+# The whole parts list for a serial, to CSV
+.\Lookup-Part.ps1 PF0ABCDE -CsvPath .\parts.csv
+
+# The preset part names
+.\Lookup-Part.ps1 -ListParts
+```
+
 The module can also be used directly:
 
 ```powershell
 Import-Module .\LenovoWarranty.psm1
 Get-LenovoWarranty PF0ABCDE, PF1FGHIJ | Format-Table
+
+(Find-LenovoPart PF0ABCDE 'LCD back cover').Matches
+(Get-LenovoPartsList PF0ABCDE).Parts | Format-Table
 ```
 
 ## Files
@@ -91,8 +156,9 @@ Get-LenovoWarranty PF0ABCDE, PF1FGHIJ | Format-Table
 |---|---|
 | `Lenovo Warranty Lookup.cmd` | Double-click launcher for the GUI |
 | `LenovoWarrantyLookup.ps1` | The GUI |
-| `Lookup-Warranty.ps1` | Command line front end |
-| `LenovoWarranty.psm1` | Lookup engine — all the API and parsing logic |
+| `Lookup-Warranty.ps1` | Command line front end for warranty lookup |
+| `Lookup-Part.ps1` | Command line front end for part lookup |
+| `LenovoWarranty.psm1` | Lookup engine — all the API and parsing logic for both |
 
 ## How it works
 
@@ -114,6 +180,29 @@ Roughly 25 serials take about 4 seconds. Requests that come back throttled or
 with a server error are retried twice; a "serial not found" answer is treated
 as final.
 
+### Part lookup
+
+Two more calls to the same support site, chained:
+
+```
+GET https://pcsupport.lenovo.com/us/en/api/v4/mse/getproducts?productId=PF0ABCDE
+```
+
+resolves the serial to its product path, which carries the machine type and
+model (`.../21ah/21ah00bbus/pf0abcde`), and then
+
+```
+POST https://pcsupport.lenovo.com/us/en/api/v4/upsellAggregation/parts/export
+     ?type=SERIAL&serialId=pf0abcde&model=21ah00bbus&mtId=21ah
+```
+
+is the **Download parts list** link from Lenovo's own parts lookup page. It
+returns the serial's full FRU list as a spreadsheet, which the module reads
+straight out of the xlsx (it is only a zip of XML) — no Excel, no extra
+modules. Should the export ever come back as CSV or JSON instead, the same
+normaliser handles those too, matching columns by wording (`FRU`, `Part
+Number`, `Description`, `Commodity`, ...) rather than position.
+
 ## Requirements
 
 Windows PowerShell 5.1 (built into Windows) and internet access to
@@ -124,6 +213,15 @@ Windows PowerShell 5.1 (built into Windows) and internet access to
 - This rides an undocumented internal endpoint. It has been stable for years,
   but if Lenovo changes it, `$script:ApiUrl` and `ConvertFrom-LenovoIbaseInfo`
   in `LenovoWarranty.psm1` are the two places to fix.
+- Part lookup rides two more of the same kind. The product resolver is widely
+  used and well understood; the parts export is the site's own download link,
+  captured from a browser session rather than documented. If it changes,
+  `$script:PartsExportUrl`, the query built in `Get-LenovoPartsList`, and the
+  column patterns in `ConvertTo-LenovoPartRows` are the places to look. The
+  preset patterns live in `$script:PartCategories` and are easy to extend.
+- Part matching is textual. It is tuned to the wording Lenovo uses in its
+  parts lists, but a part with an unusual description can be missed or an
+  odd one included — **All parts** is always there as the backstop.
 - Serials are normalised to uppercase; blank lines, commas, tabs and stray
   quotes in pasted input are handled.
 - Duplicate serials are deliberately **kept**, so the output stays row-for-row
