@@ -6,8 +6,9 @@
     end date for each one, in the same order, ready to paste into Excel.
 
     The PARTS tab in the masthead switches to a second section: type one
-    serial, pick a part from the preset list (LCD back cover, SSD, system
-    board, ...) and it returns the Lenovo part number(s) for that machine.
+    serial and it returns the Lenovo part numbers for that machine, narrowed
+    to whichever of Lenovo's own commodities (LCD ASSEMBLIES, SYSTEM BOARDS,
+    ...) you pick from the dropdown.
 
     Launch it with "Lenovo Warranty Lookup.cmd", or run this file directly with
     powershell -ExecutionPolicy Bypass -File .\LenovoWarrantyLookup.ps1
@@ -479,7 +480,7 @@ $pSerialBox.Controls.Add($txtPSerial)
 
 # ---- part ----
 $lblPPart           = New-Object System.Windows.Forms.Label
-$lblPPart.Text      = 'PART'
+$lblPPart.Text      = 'COMMODITY'
 $lblPPart.Font      = $fontLabel
 $lblPPart.ForeColor = $navy
 $lblPPart.AutoSize  = $true
@@ -489,10 +490,9 @@ $partsPanel.Controls.Add($lblPPart)
 $pPartBox = New-BorderBox -X 0 -Y 94 -W $PCOL -H 30
 $partsPanel.Controls.Add($pPartBox)
 
-# The preset list comes from the module so the GUI and the command line
-# always agree on what can be asked for.
-$script:PartCategoryNames = @(Get-LenovoPartCategory | ForEach-Object { $_.Name })
-
+# Lenovo groups each machine's parts under its own commodities (LCD
+# ASSEMBLIES, SYSTEM BOARDS, ...), and the grouping differs per machine, so
+# the dropdown is filled from the list once it has been looked up.
 $cboPart                = New-Object System.Windows.Forms.ComboBox
 $cboPart.DropDownStyle  = 'DropDownList'
 $cboPart.FlatStyle      = 'Flat'
@@ -502,7 +502,6 @@ $cboPart.ForeColor      = $navy
 $cboPart.Dock           = 'Fill'
 $cboPart.MaxDropDownItems = 16
 [void]$cboPart.Items.Add('ALL PARTS')
-foreach ($n in $script:PartCategoryNames) { [void]$cboPart.Items.Add($n.ToUpperInvariant()) }
 $cboPart.SelectedIndex  = 0
 $pPartBox.Controls.Add($cboPart)
 
@@ -530,9 +529,10 @@ $lblPInfo.TextAlign = 'TopLeft'
 $pProductBox.Controls.Add($lblPInfo)
 
 $lblPHint           = New-Object System.Windows.Forms.Label
-$lblPHint.Text      = "TYPE A SERIAL, PICK A PART, PRESS ENTER.`r`n`r`n" +
-                      "MATCHES GO BY LENOVO'S OWN WORDING -`r`n" +
-                      "READ THE DESCRIPTION BEFORE ORDERING.`r`n`r`n" +
+$lblPHint.Text      = "TYPE A SERIAL, PRESS ENTER.`r`n`r`n" +
+                      "THE COMMODITY LIST THEN FILLS WITH`r`n" +
+                      "LENOVO'S OWN GROUPS FOR THAT MACHINE -`r`n" +
+                      "PICK ONE TO NARROW THE LIST.`r`n`r`n" +
                       "ALL PARTS SHOWS THE WHOLE LIST."
 $lblPHint.Font      = $fontSub
 $lblPHint.ForeColor = $navy
@@ -553,11 +553,9 @@ $pGridBox = New-BorderBox -X ($PCOL + 24) -Y 24 -W (1064 - $PCOL - 24) -H 496 -A
 $partsPanel.Controls.Add($pGridBox)
 
 $pgrid = New-BrutalGrid -FillColumn 'Description' -Columns @(
-    @{ N = 'PartNumber';  H = 'PART NO.';    W = 132 },
-    @{ N = 'Description'; H = 'DESCRIPTION'; W = 230 },
-    @{ N = 'Commodity';   H = 'COMMODITY';   W = 160 },
-    @{ N = 'Cru';         H = 'SERVICEABLE'; W = 112 },
-    @{ N = 'Status';      H = 'STATUS';      W = 104 }
+    @{ N = 'PartNumber';  H = 'PART NO.';    W = 140 },
+    @{ N = 'Description'; H = 'DESCRIPTION'; W = 440 },
+    @{ N = 'Cru';         H = 'SERVICEABLE'; W = 130 }
 )
 $pGridBox.Controls.Add($pgrid)
 
@@ -774,10 +772,36 @@ function Invoke-Lookup {
 # ---- parts section ----
 $script:PartsList   = $null    # last Get-LenovoPartsList result, one serial
 $script:PartMatches = @()      # rows currently in the parts grid
+$script:FillingCommodities = $false
 
-function Get-SelectedPartCategory {
+function Get-SelectedCommodity {
     if ($cboPart.SelectedIndex -le 0) { return 'All parts' }
-    return $script:PartCategoryNames[$cboPart.SelectedIndex - 1]
+    return [string]$cboPart.SelectedItem
+}
+
+function Update-PartCommodities {
+    <#
+        Refills the dropdown with Lenovo's commodities for the machine just
+        looked up, in Lenovo's wording, keeping the current choice when the
+        new machine has it too. With no list it is back to ALL PARTS alone.
+    #>
+    $names = @()
+    if ($script:PartsList -and -not $script:PartsList.Error) {
+        $names = @(Get-LenovoPartCommodity -Part $script:PartsList.Parts)
+    }
+    $keep = [string]$cboPart.SelectedItem
+    $script:FillingCommodities = $true
+    try {
+        $cboPart.BeginUpdate()
+        $cboPart.Items.Clear()
+        [void]$cboPart.Items.Add('ALL PARTS')
+        foreach ($n in $names) { [void]$cboPart.Items.Add($n.ToUpperInvariant()) }
+        $cboPart.EndUpdate()
+        $idx = $cboPart.Items.IndexOf($keep)
+        $cboPart.SelectedIndex = $(if ($idx -ge 0) { $idx } else { 0 })
+    } finally {
+        $script:FillingCommodities = $false
+    }
 }
 
 function Update-PartInfo {
@@ -807,32 +831,26 @@ function Update-PartInfo {
 }
 
 function Update-PartGrid {
-    <#  Filters the cached parts list by the chosen preset and repaints. #>
-    $cat = Get-SelectedPartCategory
+    <#  Filters the cached parts list by the chosen commodity and repaints. #>
+    $cat = Get-SelectedCommodity
 
     $script:PartMatches = @()
     if ($script:PartsList -and -not $script:PartsList.Error) {
-        $script:PartMatches = @(Select-LenovoPart -Part $script:PartsList.Parts -Category $cat)
+        $script:PartMatches = @(Select-LenovoPart -Part $script:PartsList.Parts -Commodity $cat)
     }
 
     $pgrid.SuspendLayout()
     $pgrid.Rows.Clear()
     foreach ($p in $script:PartMatches) {
-        $statusText = $p.Status.ToUpperInvariant()
         # "CRU T1 (mandatory)" is more than the column needs; the bracket
         # part is in the copied table and the CSV.
         $cruText = ($p.Cru -replace '\s*\(.*\)\s*$', '').ToUpperInvariant()
-        $idx = $pgrid.Rows.Add($p.PartNumber, $p.Description, $p.Commodity, $cruText, $statusText)
+        $idx = $pgrid.Rows.Add($p.PartNumber, $p.Description, $cruText)
         $row = $pgrid.Rows[$idx]
 
         # The part number is what you came for, so it gets the loud colour.
         $row.Cells['PartNumber'].Style.Font      = $fontLabel
         $row.Cells['PartNumber'].Style.ForeColor = $crimson
-
-        if ($statusText -match 'UNAVAIL|NOT AVAIL|DISCONTIN|NO LONGER|OBSOLETE|END OF LIFE|\bEOL\b') {
-            $row.Cells['Status'].Style.ForeColor = $magenta
-            $row.Cells['Status'].Style.Font      = $fontLabel
-        }
     }
     $pgrid.ResumeLayout()
     $pgrid.ClearSelection()
@@ -852,10 +870,10 @@ function Update-PartGrid {
     if ($cat -eq 'All parts') {
         Set-Status "$n PARTS LISTED" $crimson -Target $pstatus
     } elseif ($have) {
-        $word = if ($n -eq 1) { 'MATCH' } else { 'MATCHES' }
-        Set-Status "$n $word FOR $cat" $crimson -Target $pstatus
+        $word = if ($n -eq 1) { 'PART' } else { 'PARTS' }
+        Set-Status "$n $word IN $cat" $crimson -Target $pstatus
     } else {
-        Set-Status "NO $cat LISTED - TRY ALL PARTS" $magenta -Target $pstatus
+        Set-Status "NOTHING IN $cat - TRY ALL PARTS" $magenta -Target $pstatus
     }
 }
 
@@ -882,10 +900,12 @@ function Invoke-PartLookup {
 
     try {
         $script:PartsList = Get-LenovoPartsList -SerialNumber $serial
+        Update-PartCommodities
         Update-PartGrid
     } catch {
         $script:PartsList = $null
         $pgrid.Rows.Clear()
+        Update-PartCommodities
         Set-Status "FAILED: $($_.Exception.Message)" $magenta -Target $pstatus
     } finally {
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -944,11 +964,11 @@ function Get-PartTableText {
     <#  Every match with the serial and product it belongs to, for Excel. #>
     if (-not $script:PartsList) { return '' }
     $lines = New-Object System.Collections.Generic.List[string]
-    [void]$lines.Add("Serial`tProduct`tPart Number`tDescription`tCommodity`tServiceable`tStatus")
+    [void]$lines.Add("Serial`tProduct`tPart Number`tDescription`tCommodity`tServiceable")
     foreach ($p in $script:PartMatches) {
-        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f
+        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f
             $script:PartsList.Serial, $script:PartsList.Product,
-            $p.PartNumber, $p.Description, $p.Commodity, $p.Cru, $p.Status))
+            $p.PartNumber, $p.Description, $p.Commodity, $p.Cru))
     }
     return ($lines -join "`r`n")
 }
@@ -1060,14 +1080,16 @@ $btnPClear.Add_Click({
     $pgrid.Rows.Clear()
     $script:PartsList   = $null
     $script:PartMatches = @()
+    Update-PartCommodities
     Update-PartInfo
     foreach ($b in @($btnCopyPart, $btnCopyPTable)) { Set-BlockEnabled $b $false }
     Set-Status 'READY' $navy -Target $pstatus
     $txtPSerial.Focus()
 })
 
-# Changing the part re-filters the list already downloaded for that serial.
+# Changing the commodity re-filters the list already downloaded for that serial.
 $cboPart.Add_SelectedIndexChanged({
+    if ($script:FillingCommodities) { return }
     if (-not $script:PartsList -or $script:PartsList.Error) { return }
     $typed = @(ConvertTo-SerialList -Text $txtPSerial.Text)
     if ($typed.Count -ge 1 -and $typed[0] -eq $script:PartsList.Serial) { Update-PartGrid }

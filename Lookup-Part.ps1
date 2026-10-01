@@ -6,18 +6,21 @@
 .DESCRIPTION
     The scriptable counterpart to the PARTS section of the GUI. Resolves the
     serial to its machine type and model, pulls Lenovo's parts list for it,
-    and prints the part number(s) for the part you name - or the whole list.
+    and prints the part numbers under the commodity you name - Lenovo's own
+    grouping for that machine - or the whole list.
 
 .PARAMETER SerialNumber
     The Lenovo serial number.
 
-.PARAMETER Part
-    Which part you want, from the preset list (see -ListParts). Case and
-    punctuation do not matter: "system board", "LCD back cover", "ssd".
-    Leave it out, or pass "All parts", for the whole list.
+.PARAMETER Commodity
+    Which of Lenovo's commodities you want, as -ListCommodities prints them
+    for that machine: "SYSTEM BOARDS", "LCD ASSEMBLIES", ... Case, spacing
+    and punctuation do not matter, and a shorter form is fine when it fits
+    only one ("system board"). Leave it out, or pass "All parts", for the
+    whole list.
 
-.PARAMETER ListParts
-    Print the preset part names and exit.
+.PARAMETER ListCommodities
+    Print the commodities Lenovo groups this machine's parts under, and exit.
 
 .PARAMETER PartNumbersOnly
     Emit just the part numbers, one per line, ready for the clipboard.
@@ -26,44 +29,41 @@
     Also write the matching rows to this CSV file.
 
 .PARAMETER Diagnose
-    When a lookup fails: print what Lenovo answered to every attempt, then
-    scan the product's parts page and its scripts for the parts API the site
-    itself calls. The same report is saved next to this script as
+    Print what Lenovo answered to every attempt, then scan the product's
+    parts page and its scripts for the parts API the site itself calls. The
+    same report is saved next to this script as
     "Lenovo parts diagnostics <date>.txt", ready to paste into a bug report.
 
 .EXAMPLE
-    .\Lookup-Part.ps1 PF0ABCDE 'System board'
+    .\Lookup-Part.ps1 PF0ABCDE 'System boards'
 
 .EXAMPLE
-    .\Lookup-Part.ps1 PF0ABCDE -Part SSD -PartNumbersOnly | Set-Clipboard
+    .\Lookup-Part.ps1 PF0ABCDE -Commodity 'solid state drives' -PartNumbersOnly | Set-Clipboard
 
 .EXAMPLE
     .\Lookup-Part.ps1 PF0ABCDE -CsvPath .\parts.csv
 
 .EXAMPLE
-    .\Lookup-Part.ps1 -ListParts
+    .\Lookup-Part.ps1 PF0ABCDE -ListCommodities
 
 .EXAMPLE
     .\Lookup-Part.ps1 PF0ABCDE -Diagnose
 #>
-[CmdletBinding(DefaultParameterSetName = 'Lookup')]
+[CmdletBinding()]
 param(
-    [Parameter(ParameterSetName = 'Lookup', Mandatory, Position = 0)]
+    [Parameter(Mandatory, Position = 0)]
     [string] $SerialNumber,
 
-    [Parameter(ParameterSetName = 'Lookup', Position = 1)]
-    [string] $Part = 'All parts',
+    [Parameter(Position = 1)]
+    [Alias('Part')]
+    [string] $Commodity = 'All parts',
 
-    [Parameter(ParameterSetName = 'List', Mandatory)]
-    [switch] $ListParts,
+    [switch] $ListCommodities,
 
-    [Parameter(ParameterSetName = 'Lookup')]
     [switch] $PartNumbersOnly,
 
-    [Parameter(ParameterSetName = 'Lookup')]
     [string] $CsvPath,
 
-    [Parameter(ParameterSetName = 'Lookup')]
     [switch] $Diagnose
 )
 
@@ -72,17 +72,11 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'LenovoWarranty.psm1') -Force
 
-if ($PSCmdlet.ParameterSetName -eq 'List') {
-    'All parts'
-    Get-LenovoPartCategory | ForEach-Object { $_.Name }
-    return
-}
-
 $serial = @(ConvertTo-SerialList -Text $SerialNumber)
 if ($serial.Count -ne 1) { throw 'Give exactly one serial number.' }
 
-Write-Verbose "Looking up '$Part' for $($serial[0])."
-$result = Find-LenovoPart -SerialNumber $serial[0] -Part $Part
+Write-Verbose "Looking up '$Commodity' for $($serial[0])."
+$result = Find-LenovoPart -SerialNumber $serial[0] -Commodity $Commodity
 
 if ($Diagnose) {
     $report     = @(Get-LenovoPartsDiagnostic -SerialNumber $result.Serial -PartsList $result)
@@ -103,6 +97,18 @@ if ($result.Error) {
 Write-Verbose ("{0} - type {1}, model {2}: {3} parts listed, {4} matching" -f
     $result.Product, $result.MachineType, $result.Model, $result.Parts.Count, $result.Matches.Count)
 
+if ($ListCommodities) {
+    Write-Host "$($result.Product) - $($result.Parts.Count) parts under $($result.Commodities.Count) commodities:" -ForegroundColor Green
+    'All parts'
+    $result.Commodities
+    return
+}
+
+if ($result.Note) {
+    # The commodity asked for is not one this machine has; say which it has.
+    throw "$($result.Serial): $($result.Note)"
+}
+
 $rows = @($result.Matches | ForEach-Object {
     [pscustomobject]@{
         Serial      = $result.Serial
@@ -112,7 +118,6 @@ $rows = @($result.Matches | ForEach-Object {
         Description = $_.Description
         Commodity   = $_.Commodity
         Serviceable = $_.Cru
-        Status      = $_.Status
     }
 })
 
@@ -122,7 +127,7 @@ if ($CsvPath) {
 }
 
 if ($rows.Count -eq 0) {
-    Write-Warning "No '$Part' listed for $($result.Serial) ($($result.Product)). Try -Part 'All parts' to see the full list of $($result.Parts.Count) parts."
+    Write-Warning "No parts listed for $($result.Serial) ($($result.Product))."
     return
 }
 
@@ -131,4 +136,4 @@ if ($PartNumbersOnly) {
     return
 }
 
-$rows | Select-Object PartNumber, Description, Commodity, Serviceable, Status
+$rows | Select-Object PartNumber, Description, Commodity, Serviceable

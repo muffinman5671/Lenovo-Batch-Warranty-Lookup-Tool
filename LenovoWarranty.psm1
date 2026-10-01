@@ -412,118 +412,83 @@ Add-Type -AssemblyName System.IO.Compression            -ErrorAction SilentlyCon
 Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
 
 
-# The preset list the user picks from. Include is matched against the part
-# description and commodity; Exclude is matched against the description only
-# and knocks out the brackets, cables and screws that mention the same word.
-$script:PartCategories = @(
-    @{ Name = 'LCD panel';          Include = 'LCD|DISPLAY|PANEL|SCREEN';
-                                    Exclude = 'COVER|BEZEL|CABLE|HINGE|BRACKET|TAPE|FOIL|RUBBER|SCREW|FRAME|SUPPORT|SPONGE|GASKET|PROTECT|FILM|FELT|MYLAR|SHIELD' }
-    @{ Name = 'LCD back cover';     Include = 'REAR\s*COVER|BACK\s*COVER|LCD\s*COVER|COVER[\s,_]*LCD\s*REAR|\bA[\s_-]?COVER\b|REAR\s*CASE|LCD\s*BACK|LCD\s*REAR';
-                                    Exclude = 'BEZEL|HINGE\s*(CAP|COVER)|SCREW|RUBBER|TAPE|FOOT' }
-    @{ Name = 'LCD bezel';          Include = 'BEZEL|\bB[\s_-]?COVER\b|LCD\s*FRONT|FRONT\s*COVER';
-                                    Exclude = 'KEYBOARD|\bKBD\b|PALM|SCREW|TAPE' }
-    @{ Name = 'LCD cable';          Include = 'LCD\s*CABLE|CABLE[\s,_]*LCD|\bEDP\b|LVDS|DISPLAY\s*CABLE|PANEL\s*CABLE';
-                                    Exclude = 'SCREW|TAPE' }
-    @{ Name = 'Hinges';             Include = 'HINGE';
-                                    Exclude = 'CAP|SCREW|RUBBER|TAPE' }
-    @{ Name = 'System board';       Include = 'SYSTEM\s*BOARD|PLANAR|MAIN\s*BOARD|MOTHER\s*BOARD|\bMB\b';
-                                    Exclude = 'CABLE|BRACKET|SHIELD|SCREW|STANDOFF|INSULAT|MYLAR|TAPE|FOAM' }
-    @{ Name = 'Power button board'; Include = 'POWER\s*(BUTTON|SWITCH|BOARD)|PWR\s*(BTN|BUTTON|BOARD)';
-                                    Exclude = 'CABLE|FFC|SCREW|SUPPLY|ADAPTER' }
-    @{ Name = 'I/O board';          Include = 'I/?O\s*BOARD|USB\s*BOARD|SUB\s*BOARD|SUBCARD|DAUGHTER|AUDIO\s*BOARD';
-                                    Exclude = 'CABLE|FFC|SCREW|BRACKET' }
-    @{ Name = 'SSD';                Include = '\bSSD\b|SOLID[\s-]*STATE|NVME|M\.2|PCIE.*(DRIVE|STORAGE)';
-                                    Exclude = 'BRACKET|THERMAL|CABLE|TRAY|SCREW|PAD|RUBBER|SHIELD|CADDY|FOAM|HOLDER|DOOR|COVER' }
-    @{ Name = 'Hard drive';         Include = '\bHDD\b|HARD\s*(DISK|DRIVE)|SATA.*(DRIVE|HDD)';
-                                    Exclude = 'BRACKET|CABLE|TRAY|SCREW|RUBBER|RAIL|CADDY|FOAM|HOLDER|DOOR|COVER' }
-    @{ Name = 'Memory';             Include = 'MEMORY|\bDIMM\b|SODIMM|\bRAM\b|DDR\d';
-                                    Exclude = 'COVER|DOOR|SHIELD|BRACKET|SCREW|FOAM|MYLAR' }
-    @{ Name = 'Battery';            Include = 'BATTERY|\bBATT\b|\bBTY\b';
-                                    Exclude = 'CABLE|COVER|BRACKET|SCREW|TAPE|CMOS|\bRTC\b|COIN|BACKUP|FOAM' }
-    @{ Name = 'AC adapter';         Include = 'ADAPTER|\bADPT\b|CHARGER|POWER\s*SUPPLY|\bPSU\b';
-                                    Exclude = 'CORD|ETHERNET|HDMI|VGA|DONGLE|DISPLAYPORT|\bDP\b|USB-?C\s*TO|BRACKET' }
-    @{ Name = 'Power cord';         Include = 'POWER\s*CORD|LINE\s*CORD|\bCORD\b|AC\s*CABLE';
-                                    Exclude = 'BRACKET' }
-    @{ Name = 'Keyboard';           Include = 'KEYBOARD|\bKBD\b|\bKB\b|\bKYB\b';
-                                    Exclude = 'BEZEL|COVER|PALM|BRACKET|PLATE|CABLE|PROTECT|SKIN|SHIELD|TAPE|FOAM|SCREW' }
-    @{ Name = 'Palmrest / C cover'; Include = 'PALM\s*REST|PALMREST|KEYBOARD\s*BEZEL|KBD\s*BEZEL|\bC[\s_-]?COVER\b|UPPER\s*CASE|TOP\s*CASE|KBD\s*COVER';
-                                    Exclude = 'SCREW|TAPE|FOAM|MYLAR' }
-    @{ Name = 'Base cover / D cover'; Include = 'BASE\s*COVER|BOTTOM\s*(COVER|CASE)|\bD[\s_-]?COVER\b|LOWER\s*CASE|BASE\s*(ASM|ASSY|ASSEMBLY|ENCLOSURE)';
-                                    Exclude = 'FOOT|FEET|RUBBER|SCREW|DOOR|TAPE' }
-    @{ Name = 'Touchpad';           Include = 'TOUCH\s*PAD|TRACK\s*PAD|CLICK\s*PAD';
-                                    Exclude = 'CABLE|BRACKET|\bFFC\b|MYLAR|SCREW|TAPE' }
-    @{ Name = 'Fingerprint reader'; Include = 'FINGER\s*PRINT|\bFPR\b|\bFP\s*(READER|SENSOR|BOARD|MODULE)';
-                                    Exclude = 'CABLE|BRACKET|\bFFC\b|SCREW' }
-    @{ Name = 'Fan / heatsink';     Include = '\bFAN\b|HEAT\s*SINK|HEATSINK|THERMAL|COOLER|COOLING';
-                                    Exclude = 'PAD|PASTE|GREASE|TAPE|SHEET|FOAM|GRAPHITE|BRACKET|CABLE|SCREW' }
-    @{ Name = 'Wireless card';      Include = '\bWLAN\b|\bWWAN\b|WIRELESS|WI-?FI|BLUETOOTH|\bLTE\b|\b5G\b|INTEL\s*AX\d';
-                                    Exclude = 'ANTENNA|CABLE|BRACKET|COVER|TRAY|\bSIM\b|SCREW|TAPE' }
-    @{ Name = 'Antenna';            Include = 'ANTENNA';
-                                    Exclude = 'SCREW|TAPE' }
-    @{ Name = 'Camera';             Include = 'CAMERA|WEBCAM|\bCAM\b|\bIR\s*CAM';
-                                    Exclude = 'SHUTTER|CABLE|BRACKET|TAPE|FOAM|MYLAR|SCREW' }
-    @{ Name = 'Speakers';           Include = 'SPEAKER|\bSPK\b';
-                                    Exclude = 'CABLE|BRACKET|GRILL|FOAM|TAPE|SCREW' }
-    @{ Name = 'Screws';             Include = 'SCREW';
-                                    Exclude = '' }
-) | ForEach-Object { [pscustomobject]$_ }
-
-
-function Get-LenovoPartCategory {
+function Get-LenovoPartCommodity {
     <#
     .SYNOPSIS
-        The preset list of parts the tool knows how to pick out of a parts list.
+        The commodities - Lenovo's own grouping of parts - present in a parts list.
     .DESCRIPTION
-        Returns one object per preset with Name, Include and Exclude (the
-        regular expressions used to match it). Pass -Name to get just one.
+        The distinct commodity names in a parts list, in Lenovo's wording,
+        sorted. This is what the GUI's dropdown fills with after a lookup:
+        the list is per machine, so the choices are whatever Lenovo groups
+        that machine's parts under. Parts without a commodity add nothing.
     #>
     [CmdletBinding()]
-    param([string] $Name)
+    param([Parameter(Position = 0)] [object[]] $Part)
 
-    if (-not $Name) { return $script:PartCategories }
+    if ($null -eq $Part) { return @() }
+    $seen  = @{}
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($p in $Part) {
+        if ($null -eq $p -or -not $p.PSObject.Properties['Commodity']) { continue }
+        $c = ([string]$p.Commodity).Trim()
+        if (-not $c) { continue }
+        $k = ($c -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
+        if (-not $seen.ContainsKey($k)) { $seen[$k] = $true; [void]$names.Add($c) }
+    }
+    return @($names | Sort-Object)
+}
 
-    $hit = $script:PartCategories | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
-    if ($hit) { return $hit }
 
-    # Be forgiving about punctuation and spacing: "lcd back cover", "Base cover".
-    $flat = ($Name -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
-    $hit = $script:PartCategories | Where-Object {
-        (($_.Name -replace '[^A-Za-z0-9]', '').ToUpperInvariant()) -eq $flat
-    } | Select-Object -First 1
-    if ($hit) { return $hit }
+function Resolve-LenovoPartCommodity {
+    <#
+        Matches what was asked for to one commodity of a parts list: exact
+        once case, spacing and punctuation are ignored ("system boards" is
+        SYSTEM BOARDS), else the one commodity that contains the words
+        ("system board", "ssd" for SOLID STATE DRIVES would not). Throws,
+        naming the machine's commodities, when nothing fits.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)] [object[]] $Part,
+        [Parameter(Position = 1)] [string]   $Commodity
+    )
 
-    $names = ($script:PartCategories | ForEach-Object { $_.Name }) -join ', '
-    throw "Unknown part '$Name'. Choose one of: $names"
+    $flat  = { param($v) ([string]$v -replace '[^A-Za-z0-9]', '').ToUpperInvariant() }
+    $names = @(Get-LenovoPartCommodity -Part $Part)
+    $want  = & $flat $Commodity
+
+    foreach ($n in $names) { if ((& $flat $n) -eq $want) { return $n } }
+    if ($want) {
+        $contains = @($names | Where-Object { (& $flat $_).Contains($want) })
+        if ($contains.Count -eq 1) { return $contains[0] }
+    }
+    $have = if ($names.Count -gt 0) { $names -join ', ' } else { 'no commodities at all' }
+    throw "No '$Commodity' commodity for this machine. It has: $have"
 }
 
 
 function Select-LenovoPart {
     <#
     .SYNOPSIS
-        Filters a parts list down to one preset part.
+        Filters a parts list down to one of Lenovo's commodities.
     .DESCRIPTION
-        Matching is by wording: the preset's Include pattern is tested against
-        the description and commodity, then its Exclude pattern knocks out
-        brackets, cables and screws that happen to mention the same word. An
-        empty Category or 'All parts' returns the list untouched.
+        Keeps the rows whose commodity is the one named, matched the way
+        Resolve-LenovoPartCommodity matches. An empty Commodity or 'All
+        parts' returns the list untouched.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Position = 0)] [object[]] $Part,
-        [Parameter(Position = 1)] [string]   $Category
+        [Parameter(Position = 1)] [string]   $Commodity
     )
 
     if ($null -eq $Part) { return @() }
-    if (-not $Category -or $Category -match '^\s*all(\s*parts)?\s*$') { return @($Part) }
+    if (-not $Commodity -or $Commodity -match '^\s*all(\s*parts)?\s*$') { return @($Part) }
 
-    $cat = Get-LenovoPartCategory -Name $Category
+    $flat = { param($v) ([string]$v -replace '[^A-Za-z0-9]', '').ToUpperInvariant() }
+    $name = & $flat (Resolve-LenovoPartCommodity -Part $Part -Commodity $Commodity)
 
-    return @($Part | Where-Object {
-        $desc = [string]$_.Description
-        $both = $desc + ' | ' + [string]$_.Commodity
-        ($both -match $cat.Include) -and
-        (-not $cat.Exclude -or ($desc -notmatch $cat.Exclude))
-    })
+    return @($Part | Where-Object { (& $flat $_.Commodity) -eq $name })
 }
 
 
@@ -1018,7 +983,7 @@ function ConvertFrom-LenovoPartsJson {
 function Get-LenovoPartColumns {
     <#
         Works out which keys of a set of part records carry which field -
-        part number, description, commodity, status, CRU, price - by wording
+        part number, description, commodity, CRU, price - by wording
         rather than position. Each field gets every candidate key, best
         first, so a record whose first-choice key is empty falls back to the
         next one. The keys seen and a sample value of each come back too;
@@ -1066,8 +1031,6 @@ function Get-LenovoPartColumns {
                                 "$other|commodit|categor|group|class|family|tier|section|model|serial|machine|brand|key|code|id$|html|short|user|operator|host|request")
         Commodity   = @(& $pick @('commodity[\s_.-]*(name|desc|label|display|text|val)', 'commodity', 'categor', 'part[s\s_-]*type', '^\s*type\s*$', 'group', 'class', 'family') `
                                 "$other|id$|count|total|filter|list|param|key|code|lang|source")
-        Status      = @(& $pick @('^\s*status\s*$', 'availab', 'status', 'stock', 'orderable|purchas', 'eol|discontinu|lifecycle') `
-                                "$other|code$|id$|date|time|msg|message|cost|price|qty|quantity|count|notify")
         Cru         = @(& $pick @('^\s*cru', 'cru[\s_-]*(tier|type|level)', '\bcru\b', 'serviceab') $other)
         Price       = @(& $pick @('price', 'cost') "$other|currency|symbol|unit|type|id$|format")
     }
@@ -1092,7 +1055,7 @@ function Get-LenovoPartFieldsSummary {
     $seen = foreach ($k in $cols.Keys) { "$k=`"$(& $clip $cols.Sample[$k])`"" }
     [void]$lines.Add('fields seen: ' + ($seen -join ' | '))
 
-    $readAs = foreach ($f in @('PartNumber', 'Description', 'Commodity', 'Status', 'Cru', 'Price')) {
+    $readAs = foreach ($f in @('PartNumber', 'Description', 'Commodity', 'Cru', 'Price')) {
         $c = @($cols.Map[$f])
         "$f <- " + $(if ($c.Count -gt 0) { $c -join ' / ' } else { '(none)' })
     }
@@ -1134,7 +1097,7 @@ function ConvertTo-LenovoCruName {
 function ConvertTo-LenovoPartRows {
     <#
         Maps whatever column names the export uses onto the fixed set the
-        tool reports: PartNumber, Description, Commodity, Status, Cru, Price.
+        tool reports: PartNumber, Description, Commodity, Cru, Price.
         Column matching is by wording (Get-LenovoPartColumns) so a renamed
         header or a reordered sheet does not break anything, and each field
         takes the first of its candidate keys that holds a value in that
@@ -1163,23 +1126,6 @@ function ConvertTo-LenovoPartRows {
         foreach ($k in $Keys) { $v = & $get $Rec $k; if ($v) { return $v } }
         return ''
     }
-    $statusOf = {
-        # Lenovo may say "Available", or answer a yes/no question such as
-        # inStock or discontinued; either way it comes out as a word.
-        param($Rec, [string[]] $Keys)
-        foreach ($k in $Keys) {
-            $v = & $get $Rec $k
-            if (-not $v) { continue }
-            $flag = $null
-            if ($v -match '^(true|yes|y)$')     { $flag = $true }
-            elseif ($v -match '^(false|no|n)$') { $flag = $false }
-            elseif ($v -match '^[01]$' -and $k -match 'avail|stock|orderable|purchas|sell|eol|discontinu') { $flag = ($v -eq '1') }
-            if ($null -eq $flag) { return $v }
-            if ($k -match 'eol|discontinu|unavail|out[\s_-]*of[\s_-]*stock|sold[\s_-]*out|not[\s_-]*avail|^no[\s_-]') { $flag = -not $flag }
-            if ($flag) { return 'Available' } else { return 'Unavailable' }
-        }
-        return ''
-    }
 
     $rows = foreach ($rec in $Record) {
         $pn = (& $first $rec $map['PartNumber']) -replace '\s+', ''
@@ -1200,7 +1146,6 @@ function ConvertTo-LenovoPartRows {
             PartNumber  = $pn.ToUpperInvariant()
             Description = & $first $rec $map['Description']
             Commodity   = & $first $rec $map['Commodity']
-            Status      = & $statusOf $rec $map['Status']
             Cru         = ConvertTo-LenovoCruName -Code (& $first $rec $map['Cru'])
             Price       = & $first $rec $map['Price']
         }
@@ -1373,7 +1318,7 @@ function Get-LenovoPartsList {
         Resolves the serial to its machine type and model, then pulls the
         parts list Lenovo's parts lookup page offers as "Download parts list".
         Returns one object carrying the product details and a Parts array of
-        PartNumber / Description / Commodity / Status / Cru / Price rows.
+        PartNumber / Description / Commodity / Cru / Price rows.
         Problems are reported in Error rather than thrown.
 
     .EXAMPLE
@@ -1692,32 +1637,50 @@ function Get-LenovoPartsDiagnostic {
 function Find-LenovoPart {
     <#
     .SYNOPSIS
-        Finds the part number(s) for one preset part on one Lenovo serial.
+        The part numbers under one of Lenovo's commodities for one serial.
 
     .DESCRIPTION
-        Looks up the serial's parts list and keeps the rows matching the
-        chosen preset (see Get-LenovoPartCategory for the list). Returns the
-        parts list object with Category and Matches added.
+        Looks up the serial's parts list and keeps the rows under the chosen
+        commodity - Lenovo's own grouping, which differs per machine (see
+        Get-LenovoPartCommodity). Returns the parts list object with
+        Commodity (as resolved), Commodities (the machine's list), Matches
+        and Note added; Note says so when the commodity asked for is not one
+        this machine has, and Matches is then empty.
 
     .EXAMPLE
-        (Find-LenovoPart PF0ABCDE 'System board').Matches
+        (Find-LenovoPart PF0ABCDE 'System boards').Matches
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, Position = 0)] [string] $SerialNumber,
-        [Parameter(Position = 1)]            [string] $Part = 'All parts',
+        [Parameter(Position = 1)] [Alias('Part')] [string] $Commodity = 'All parts',
         [int] $TimeoutSec = 60
     )
 
-    # Validate the preset before spending a round trip on it.
-    if ($Part -and $Part -notmatch '^\s*all(\s*parts)?\s*$') { [void](Get-LenovoPartCategory -Name $Part) }
-
     $list = Get-LenovoPartsList -SerialNumber $SerialNumber -TimeoutSec $TimeoutSec
     $hits = @()
-    if (-not $list.Error) { $hits = @(Select-LenovoPart -Part $list.Parts -Category $Part) }
+    $names = @()
+    $name  = $Commodity
+    $note  = ''
+    if (-not $list.Error) {
+        $names = @(Get-LenovoPartCommodity -Part $list.Parts)
+        if (-not $Commodity -or $Commodity -match '^\s*all(\s*parts)?\s*$') {
+            $name = 'All parts'
+            $hits = @($list.Parts)
+        } else {
+            try {
+                $name = Resolve-LenovoPartCommodity -Part $list.Parts -Commodity $Commodity
+                $hits = @(Select-LenovoPart -Part $list.Parts -Commodity $name)
+            } catch {
+                $note = $_.Exception.Message
+            }
+        }
+    }
 
-    $list | Add-Member -NotePropertyName Category -NotePropertyValue $Part
-    $list | Add-Member -NotePropertyName Matches  -NotePropertyValue $hits
+    $list | Add-Member -NotePropertyName Commodity   -NotePropertyValue $name
+    $list | Add-Member -NotePropertyName Commodities -NotePropertyValue $names
+    $list | Add-Member -NotePropertyName Matches     -NotePropertyValue $hits
+    $list | Add-Member -NotePropertyName Note        -NotePropertyValue $note
     return $list
 }
 
@@ -1726,7 +1689,7 @@ Export-ModuleMember -Function Get-LenovoWarranty, ConvertTo-SerialList,
                               Format-WarrantyDate, ConvertFrom-LenovoIbaseInfo,
                               ConvertTo-DateOrNull,
                               Get-LenovoProduct, Get-LenovoPartsList, Find-LenovoPart,
-                              Get-LenovoPartCategory, Select-LenovoPart,
+                              Get-LenovoPartCommodity, Resolve-LenovoPartCommodity, Select-LenovoPart,
                               ConvertTo-LenovoPartRows, ConvertFrom-LenovoXlsx,
                               ConvertFrom-LenovoDelimited, ConvertFrom-LenovoPartsJson,
                               ConvertFrom-LenovoJsonList, Read-LenovoPartsPayload,

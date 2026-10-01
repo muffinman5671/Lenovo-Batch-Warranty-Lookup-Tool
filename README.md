@@ -4,9 +4,9 @@ Paste a batch of Lenovo serial numbers, get back the **main device warranty end
 date** for each one — in the same order you entered them, ready to paste
 straight into Excel.
 
-A second section, **PARTS**, takes one serial number and a part picked from a
-preset list (LCD back cover, SSD, system board, ...) and returns the Lenovo
-**part number(s)** for that exact machine.
+A second section, **PARTS**, takes one serial number and returns the Lenovo
+**part numbers** for that exact machine, narrowed to whichever of Lenovo's
+own commodities (LCD ASSEMBLIES, SYSTEM BOARDS, ...) you pick.
 
 Built as a replacement for Lenovo's own
 [batch warranty lookup](https://pcsupport.lenovo.com/us/en/warrantylookup/batchquery),
@@ -58,37 +58,30 @@ anything up again.
 ## Part lookup
 
 The **PARTS** section answers "what is the part number for the X on this
-machine?". It pulls the full FRU parts list Lenovo keeps for that serial and
-keeps the rows that match the part you picked.
+machine?". It pulls the full FRU parts list Lenovo keeps for that serial,
+then the **COMMODITY** dropdown fills with the groups Lenovo files that
+machine's parts under — LCD ASSEMBLIES, SYSTEM BOARDS, CABLES INTERNAL,
+SCREWS and so on, in Lenovo's own wording — and picking one narrows the grid
+to it. The grouping differs per machine, which is why the list is built from
+the lookup rather than fixed. **All parts** shows the whole list.
 
 | Field | What it is |
 |---|---|
 | **Part no.** | The Lenovo FRU part number — what you order or quote |
 | **Description** | Lenovo's own wording for the part |
-| **Commodity** | Lenovo's part family (covers, system boards, storage, ...) |
 | **Serviceable** | Who may fit it, as Lenovo grades it: `CRU T1` (customer, mandatory), `CRU T2` (customer, optional), `FRU only` (a technician), `Consumable` |
-| **Status** | Stock as Lenovo reports it, where it reports any; out-of-stock parts show magenta |
 
-The preset list: LCD panel, LCD back cover, LCD bezel, LCD cable, hinges,
-system board, power button board, I/O board, SSD, hard drive, memory,
-battery, AC adapter, power cord, keyboard, palmrest / C cover, base cover /
-D cover, touchpad, fingerprint reader, fan / heatsink, wireless card, antenna,
-camera, speakers, screws — plus **All parts** for the whole list.
+A commodity can hold more than one part when a machine was sold in several
+configurations — three LCD assemblies for touch, non-touch and WWAN, say —
+so **read the description before ordering**.
 
-Matching goes by Lenovo's wording. Each preset has a pattern it looks for
-(`PLANAR` and `SYSTEM BOARD` both count as a system board) and a pattern it
-rules out (a `Bracket, SSD` is not an SSD). A part can match more than once
-when a machine was sold in several configurations — three LCD back covers for
-touch, non-touch and WWAN, say — so **read the description before ordering**.
-If the preset you picked finds nothing, switch to **All parts** and scan.
-
-The parts list is downloaded once per serial; changing the part in the
+The parts list is downloaded once per serial; changing the commodity in the
 dropdown re-filters it instantly.
 
 - **Copy part no.** — the part numbers in the grid, one per line. Select
   rows first to copy just those.
-- **Copy table** — serial, product, part number, description, commodity,
-  serviceable and status, tab separated with a header row.
+- **Copy table** — serial, product, part number, description, commodity and
+  serviceable, tab separated with a header row.
 
 ## Look
 
@@ -134,17 +127,17 @@ For scripted use or very large batches:
 Part lookup has its own front end:
 
 ```powershell
-# Part numbers for one part on one machine
-.\Lookup-Part.ps1 PF0ABCDE 'System board'
+# Part numbers under one of Lenovo's commodities for one machine
+.\Lookup-Part.ps1 PF0ABCDE 'System boards'
 
-# Just the part number(s), onto the clipboard
-.\Lookup-Part.ps1 PF0ABCDE -Part SSD -PartNumbersOnly | Set-Clipboard
+# Just the part numbers, onto the clipboard
+.\Lookup-Part.ps1 PF0ABCDE -Commodity 'solid state drives' -PartNumbersOnly | Set-Clipboard
 
 # The whole parts list for a serial, to CSV
 .\Lookup-Part.ps1 PF0ABCDE -CsvPath .\parts.csv
 
-# The preset part names
-.\Lookup-Part.ps1 -ListParts
+# The commodities Lenovo groups this machine's parts under
+.\Lookup-Part.ps1 PF0ABCDE -ListCommodities
 ```
 
 The module can also be used directly:
@@ -153,7 +146,8 @@ The module can also be used directly:
 Import-Module .\LenovoWarranty.psm1
 Get-LenovoWarranty PF0ABCDE, PF1FGHIJ | Format-Table
 
-(Find-LenovoPart PF0ABCDE 'LCD back cover').Matches
+(Find-LenovoPart PF0ABCDE 'LCD assemblies').Matches
+Get-LenovoPartCommodity (Get-LenovoPartsList PF0ABCDE).Parts
 (Get-LenovoPartsList PF0ABCDE).Parts | Format-Table
 ```
 
@@ -243,11 +237,10 @@ Windows PowerShell 5.1 (built into Windows) and internet access to
   scripts make, read out of those scripts rather than documented. If they
   change, `$script:PartsApiBase`, the attempt list in `Get-LenovoPartsList`,
   and the column patterns in `ConvertTo-LenovoPartRows` are the places to
-  look, and the **Diagnose** report shows what the page calls now. The preset
-  patterns live in `$script:PartCategories` and are easy to extend.
-- Part matching is textual. It is tuned to the wording Lenovo uses in its
-  parts lists, but a part with an unusual description can be missed or an
-  odd one included — **All parts** is always there as the backstop.
+  look, and the **Diagnose** report shows what the page calls now.
+- The commodity dropdown is only as good as Lenovo's grouping. A part filed
+  under an unexpected commodity is still in the list — **All parts** is
+  always there as the backstop.
 - When a part lookup fails, the product card in the GUI shows what Lenovo
   answered the first attempt. The **Diagnose** block (or
   `.\Lookup-Part.ps1 <serial> -Diagnose`, or double-clicking
