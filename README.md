@@ -66,7 +66,8 @@ keeps the rows that match the part you picked.
 | **Part no.** | The Lenovo FRU part number — what you order or quote |
 | **Description** | Lenovo's own wording for the part |
 | **Commodity** | Lenovo's part family (covers, system boards, storage, ...) |
-| **Status** | Availability as Lenovo reports it; unavailable parts show magenta |
+| **Serviceable** | Who may fit it, as Lenovo grades it: `CRU T1` (customer, mandatory), `CRU T2` (customer, optional), `FRU only` (a technician), `Consumable` |
+| **Status** | Stock as Lenovo reports it, where it reports any; out-of-stock parts show magenta |
 
 The preset list: LCD panel, LCD back cover, LCD bezel, LCD cable, hinges,
 system board, power button board, I/O board, SSD, hard drive, memory,
@@ -86,8 +87,8 @@ dropdown re-filters it instantly.
 
 - **Copy part no.** — the part numbers in the grid, one per line. Select
   rows first to copy just those.
-- **Copy table** — serial, product, part number, description, commodity
-  and status, tab separated with a header row.
+- **Copy table** — serial, product, part number, description, commodity,
+  serviceable and status, tab separated with a header row.
 
 ## Look
 
@@ -215,7 +216,11 @@ list** export is the last resort.
 The JSON reader does not assume a layout: it walks whatever comes back and
 keeps every object carrying a part number, so a bare list, a list under
 `data`, or parts grouped under commodities all read the same, with the group's
-commodity name carried onto each part. A spreadsheet export is read straight
+commodity name carried onto each part. Lenovo's own as-built list is an
+array of objects with the FRU number under `id`, the wording under `name`,
+the family under `commodityVal` and the tier under `cruTier`; items with no
+FRU (the "installed, but no further details" ones) have an empty `id` and
+are left out. A spreadsheet export is read straight
 out of the xlsx (it is only a zip of XML) — no Excel, no extra modules — and
 CSV is handled too. Columns are matched by wording (`FRU`, `Part Number`,
 `Description`, `Commodity`, ...) rather than position, and every column has

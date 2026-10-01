@@ -893,10 +893,13 @@ function ConvertFrom-LenovoPartsJson {
         object that carries a part number: a bare array, an array under
         data/parts, or parts grouped under commodities all come out the same.
         A group's label (commodity, category, tier) is inherited by the parts
-        beneath it. Inside a part, a nested object is kept both as one value
-        (its part number or name) and as its own fields, dotted - so a
-        description tucked under detail.name is still found by name - and a
-        nested list of objects collapses to their labels.
+        beneath it. A part is an object with a part-number-looking value
+        under a part-number-ish key, or - as Lenovo's own list has it - a
+        plain id that looks like one next to a name or commodity. Inside a
+        part, a nested object or the first object of a nested list is kept
+        both as one value (its part number or name) and as its own fields,
+        dotted, so a description tucked under localizations.name is still
+        found by name; the rest of a nested list collapses to labels.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Text)
@@ -912,11 +915,16 @@ function ConvertFrom-LenovoPartsJson {
 
     $isPart = {
         param($o)
+        $idLooksRight = $false
+        $partish      = $false
         foreach ($p in $o.PSObject.Properties) {
-            if ($p.Name -match $pnKey -and $null -ne $p.Value -and
-                (& $isScalar $p.Value) -and ([string]$p.Value).Trim() -match $pnVal) { return $true }
+            $scalar = ($null -ne $p.Value) -and (& $isScalar $p.Value)
+            if ($p.Name -match $pnKey -and $scalar -and ([string]$p.Value).Trim() -match $pnVal) { return $true }
+            if ($p.Name -eq 'id') {
+                if ($scalar -and ([string]$p.Value).Trim() -match $pnVal) { $idLooksRight = $true }
+            } elseif ($p.Name -match '(?i)^name$|desc|commodit|cru|price|quantit|substitut') { $partish = $true }
         }
-        return $false
+        return ($idLooksRight -and $partish)
     }
 
     $labelOf = {
@@ -926,9 +934,20 @@ function ConvertFrom-LenovoPartsJson {
             if ($p.Name -match $pnKey -and $null -ne $p.Value -and (& $isScalar $p.Value) -and [string]$p.Value) { return ([string]$p.Value).Trim() }
         }
         foreach ($p in $o.PSObject.Properties) {
+            if ($p.Name -eq 'id' -and $null -ne $p.Value -and (& $isScalar $p.Value) -and ([string]$p.Value).Trim() -match $pnVal) { return ([string]$p.Value).Trim() }
+        }
+        foreach ($p in $o.PSObject.Properties) {
             if ($p.Name -match '(?i)name|desc|title' -and $p.Value -is [string] -and $p.Value) { return $p.Value.Trim() }
         }
         return ''
+    }
+
+    $hoist = {
+        # A nested object's own scalar fields, dotted under the parent key.
+        param([System.Collections.Specialized.OrderedDictionary] $Rec, [string] $Prefix, $Obj)
+        foreach ($q in $Obj.PSObject.Properties) {
+            if ($null -ne $q.Value -and (& $isScalar $q.Value)) { $Rec["$Prefix.$($q.Name)"] = [string]$q.Value }
+        }
     }
 
     $flatten = {
@@ -944,13 +963,16 @@ function ConvertFrom-LenovoPartsJson {
                     if (& $isScalar $i) { [string]$i } elseif ($i -is [psobject]) { & $labelOf $i }
                 }
                 $rec[$p.Name] = (@($items | Where-Object { $_ }) -join ', ')
+                if ($p.Name -notmatch '(?i)substitut|\bsubs?\b|bundle|products?$|image') {
+                    foreach ($i in $v) {
+                        if ($null -ne $i -and -not (& $isScalar $i) -and $i -is [psobject]) { & $hoist $rec $p.Name $i; break }
+                    }
+                }
                 continue
             }
             if ($v -is [psobject]) {
                 $rec[$p.Name] = & $labelOf $v
-                foreach ($q in $v.PSObject.Properties) {
-                    if ($null -ne $q.Value -and (& $isScalar $q.Value)) { $rec["$($p.Name).$($q.Name)"] = [string]$q.Value }
-                }
+                & $hoist $rec $p.Name $v
             }
         }
         foreach ($k in $Inherited.Keys) {
@@ -980,6 +1002,9 @@ function ConvertFrom-LenovoPartsJson {
                 if ($p.Name -match $inheritKey -and $p.Value -is [string] -and $p.Value) { $inh[$p.Name] = $p.Value.Trim() }
             }
             foreach ($p in $Node.PSObject.Properties) {
+                # A substitute or bundle list under something that is not
+                # itself a part would come out as parts of this machine.
+                if ($p.Name -match '(?i)substitut|bundle') { continue }
                 if ($null -ne $p.Value -and -not (& $isScalar $p.Value)) { & $walk $p.Value $inh ($Depth + 1) }
             }
         }
@@ -1031,17 +1056,20 @@ function Get-LenovoPartColumns {
         return $found.ToArray()
     }
 
+    # Keys that belong to something next to the part - a substitute, a
+    # bundle, the product - never stand in for the part's own field.
+    $other = 'subst|\bsubs?\b|replac|alternat|supersed|parent|bundle|product|image|url|file'
     $map = [ordered]@{
-        PartNumber  = @(& $pick @('^\s*fru\s*(part)?\s*(number|no\.?|#|p/?n)?\s*$', 'part[s\s_-]*(number|no\b|no\.|#|num)', '^\s*p/?n\s*$', 'fru', 'partnumber|partno|partnum', '^\s*part\s*$', '^\s*number\s*$') `
-                                'subst|replac|alternat|supersed|parent|image|url|file|desc|name|count|total|list|qty|quantity')
-        Description = @(& $pick @('desc', 'part[s\s_-]*name', '^\s*name\s*$', 'title', '(fru|item|material)[\s_-]*name', 'name', 'label', '^text$|[\s_.-]text$', 'summary', 'info') `
-                                'commodit|categor|group|class|family|tier|section|product|model|serial|machine|brand|image|url|file|key|code|id$|html|short|user|operator|host|request')
-        Commodity   = @(& $pick @('commodity[\s_.-]*(name|desc|label|display|text)', 'commodity', 'categor', 'part[s\s_-]*type', '^\s*type\s*$', 'group', 'class', 'family') `
-                                'image|url|file|id$|count|total|filter|list|param')
-        Status      = @(& $pick @('^\s*status\s*$', 'availab', 'status', 'stock', 'orderable|purchas|sellable|saleable', 'eol|discontinu|lifecycle') `
-                                'image|url|file|code$|id$|date|time|msg|message|cost|price|qty|quantity|count')
-        Cru         = @(& $pick @('^\s*cru', 'cru[\s_-]*(tier|type|level)', '\bcru\b') 'image|url|file')
-        Price       = @(& $pick @('price', 'cost') 'image|url|file|currency|symbol|unit|type|id$|format')
+        PartNumber  = @(& $pick @('^\s*fru\s*(part)?\s*(number|no\.?|#|p/?n)?\s*$', 'part[s\s_-]*(number|no\b|no\.|#|num)', '^\s*p/?n\s*$', 'fru', 'partnumber|partno|partnum', '^\s*part\s*$', '^\s*number\s*$', '^\s*id\s*$') `
+                                "$other|desc|name|count|total|list|qty|quantity|^(not|is|has)[A-Z_]")
+        Description = @(& $pick @('^\s*name\s*$', 'desc', 'part[s\s_-]*name', 'title', '(fru|item|material)[\s_-]*name', 'name', 'label', '^text$|[\s_.-]text$', 'summary') `
+                                "$other|commodit|categor|group|class|family|tier|section|model|serial|machine|brand|key|code|id$|html|short|user|operator|host|request")
+        Commodity   = @(& $pick @('commodity[\s_.-]*(name|desc|label|display|text|val)', 'commodity', 'categor', 'part[s\s_-]*type', '^\s*type\s*$', 'group', 'class', 'family') `
+                                "$other|id$|count|total|filter|list|param|key|code|lang|source")
+        Status      = @(& $pick @('^\s*status\s*$', 'availab', 'status', 'stock', 'orderable|purchas', 'eol|discontinu|lifecycle') `
+                                "$other|code$|id$|date|time|msg|message|cost|price|qty|quantity|count|notify")
+        Cru         = @(& $pick @('^\s*cru', 'cru[\s_-]*(tier|type|level)', '\bcru\b', 'serviceab') $other)
+        Price       = @(& $pick @('price', 'cost') "$other|currency|symbol|unit|type|id$|format")
     }
 
     return [pscustomobject]@{ Keys = $keys.ToArray(); Sample = $sample; Map = $map }
@@ -1081,6 +1109,25 @@ function Get-LenovoPartFieldsSummary {
     [void]$lines.Add('record layouts: ' + ($desc -join '; '))
 
     return $lines.ToArray()
+}
+
+
+function ConvertTo-LenovoCruName {
+    <#
+        Lenovo's CRU tier codes, worded the way its parts page words them:
+        who may replace the part. Anything that is not one of the codes
+        passes through untouched.
+    #>
+    [CmdletBinding()]
+    param([string] $Code)
+
+    switch (([string]$Code).Trim()) {
+        '0'     { return 'Consumable' }
+        '1'     { return 'CRU T1 (mandatory)' }
+        '2'     { return 'CRU T2 (optional)' }
+        '9'     { return 'FRU only' }
+        default { return ([string]$Code).Trim() }
+    }
 }
 
 
@@ -1154,7 +1201,7 @@ function ConvertTo-LenovoPartRows {
             Description = & $first $rec $map['Description']
             Commodity   = & $first $rec $map['Commodity']
             Status      = & $statusOf $rec $map['Status']
-            Cru         = & $first $rec $map['Cru']
+            Cru         = ConvertTo-LenovoCruName -Code (& $first $rec $map['Cru'])
             Price       = & $first $rec $map['Price']
         }
     }
@@ -1190,7 +1237,7 @@ function Get-LenovoJsonShape {
             $parts = @()
             $i = 0
             foreach ($p in $Node.PSObject.Properties) {
-                if ($i -ge 30) { $parts += '...'; break }
+                if ($i -ge 60) { $parts += '...'; break }
                 $parts += ($p.Name + ':' + (& $sketch $p.Value ($Depth + 1)))
                 $i++
             }
@@ -1452,7 +1499,7 @@ function Get-LenovoPartsList {
                 # The winning reply is sketched too, with the field names it
                 # used, so a blank column can be traced from the report alone.
                 $detail = ''
-                if ($read.Source -eq 'json') { $detail = '; shape: ' + (Get-LenovoJsonShape -Text $resp.Text -MaxLength 1500) }
+                if ($read.Source -eq 'json') { $detail = '; shape: ' + (Get-LenovoJsonShape -Text $resp.Text -MaxLength 3000) }
                 [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($read.Source), $($read.Records.Count) records$detail")
                 foreach ($l in (Get-LenovoPartFieldsSummary -Record $read.Records)) { [void]$log.Add("   $l") }
                 $payload = $read
@@ -1685,4 +1732,5 @@ Export-ModuleMember -Function Get-LenovoWarranty, ConvertTo-SerialList,
                               ConvertFrom-LenovoJsonList, Read-LenovoPartsPayload,
                               Find-LenovoPartsEndpoint, Get-LenovoPartsDiagnostic,
                               Get-LenovoJsonShape, Get-LenovoCruTiers,
-                              Get-LenovoPartColumns, Get-LenovoPartFieldsSummary
+                              Get-LenovoPartColumns, Get-LenovoPartFieldsSummary,
+                              ConvertTo-LenovoCruName

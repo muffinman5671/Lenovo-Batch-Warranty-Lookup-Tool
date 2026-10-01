@@ -554,9 +554,10 @@ $partsPanel.Controls.Add($pGridBox)
 
 $pgrid = New-BrutalGrid -FillColumn 'Description' -Columns @(
     @{ N = 'PartNumber';  H = 'PART NO.';    W = 132 },
-    @{ N = 'Description'; H = 'DESCRIPTION'; W = 300 },
-    @{ N = 'Commodity';   H = 'COMMODITY';   W = 190 },
-    @{ N = 'Status';      H = 'STATUS';      W = 120 }
+    @{ N = 'Description'; H = 'DESCRIPTION'; W = 230 },
+    @{ N = 'Commodity';   H = 'COMMODITY';   W = 160 },
+    @{ N = 'Cru';         H = 'SERVICEABLE'; W = 112 },
+    @{ N = 'Status';      H = 'STATUS';      W = 104 }
 )
 $pGridBox.Controls.Add($pgrid)
 
@@ -818,7 +819,10 @@ function Update-PartGrid {
     $pgrid.Rows.Clear()
     foreach ($p in $script:PartMatches) {
         $statusText = $p.Status.ToUpperInvariant()
-        $idx = $pgrid.Rows.Add($p.PartNumber, $p.Description, $p.Commodity, $statusText)
+        # "CRU T1 (mandatory)" is more than the column needs; the bracket
+        # part is in the copied table and the CSV.
+        $cruText = ($p.Cru -replace '\s*\(.*\)\s*$', '').ToUpperInvariant()
+        $idx = $pgrid.Rows.Add($p.PartNumber, $p.Description, $p.Commodity, $cruText, $statusText)
         $row = $pgrid.Rows[$idx]
 
         # The part number is what you came for, so it gets the loud colour.
@@ -940,11 +944,11 @@ function Get-PartTableText {
     <#  Every match with the serial and product it belongs to, for Excel. #>
     if (-not $script:PartsList) { return '' }
     $lines = New-Object System.Collections.Generic.List[string]
-    [void]$lines.Add("Serial`tProduct`tPart Number`tDescription`tCommodity`tStatus")
+    [void]$lines.Add("Serial`tProduct`tPart Number`tDescription`tCommodity`tServiceable`tStatus")
     foreach ($p in $script:PartMatches) {
-        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f
+        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f
             $script:PartsList.Serial, $script:PartsList.Product,
-            $p.PartNumber, $p.Description, $p.Commodity, $p.Status))
+            $p.PartNumber, $p.Description, $p.Commodity, $p.Cru, $p.Status))
     }
     return ($lines -join "`r`n")
 }
