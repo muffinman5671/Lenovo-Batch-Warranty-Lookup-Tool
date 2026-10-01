@@ -75,13 +75,18 @@ A commodity can hold more than one part when a machine was sold in several
 configurations — three LCD assemblies for touch, non-touch and WWAN, say —
 so **read the description before ordering**.
 
+Under the product card, **WARRANTY** shows when that machine's device
+warranty ends and whether it is still active, with the coverage it comes
+from — the same answer the warranty side gives, in the date format picked
+there.
+
 The parts list is downloaded once per serial; changing the commodity in the
 dropdown re-filters it instantly.
 
 - **Copy part no.** — the part numbers in the grid, one per line. Select
   rows first to copy just those.
-- **Copy table** — serial, product, part number, description and commodity,
-  tab separated with a header row.
+- **Copy table** — serial, product, warranty end, part number, description
+  and commodity, tab separated with a header row.
 
 ## Look
 

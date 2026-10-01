@@ -528,6 +528,43 @@ $lblPInfo.Padding   = New-Object System.Windows.Forms.Padding(8, 6, 8, 6)
 $lblPInfo.TextAlign = 'TopLeft'
 $pProductBox.Controls.Add($lblPInfo)
 
+# ---- warranty card ----
+$lblPWarranty           = New-Object System.Windows.Forms.Label
+$lblPWarranty.Text      = 'WARRANTY'
+$lblPWarranty.Font      = $fontLabel
+$lblPWarranty.ForeColor = $navy
+$lblPWarranty.AutoSize  = $true
+$lblPWarranty.Location  = New-Object System.Drawing.Point(0, 306)
+$partsPanel.Controls.Add($lblPWarranty)
+
+$pWarrantyBox = New-BorderBox -X 0 -Y 330 -W $PCOL -H 58
+$partsPanel.Controls.Add($pWarrantyBox)
+
+$pWarrantyFace           = New-Object System.Windows.Forms.Panel
+$pWarrantyFace.BackColor = $paper
+$pWarrantyFace.Dock      = 'Fill'
+$pWarrantyBox.Controls.Add($pWarrantyFace)
+
+# The end date in the loud colour, as on the warranty side, and the
+# coverage it comes from underneath.
+$lblPWarrDate           = New-Object System.Windows.Forms.Label
+$lblPWarrDate.Text      = ''
+$lblPWarrDate.Font      = $fontLabel
+$lblPWarrDate.ForeColor = $crimson
+$lblPWarrDate.AutoSize  = $true
+$lblPWarrDate.Location  = New-Object System.Drawing.Point(8, 6)
+$pWarrantyFace.Controls.Add($lblPWarrDate)
+
+$lblPWarrNote              = New-Object System.Windows.Forms.Label
+$lblPWarrNote.Text         = ''
+$lblPWarrNote.Font         = $fontSub
+$lblPWarrNote.ForeColor    = $navy
+$lblPWarrNote.AutoSize     = $false
+$lblPWarrNote.AutoEllipsis = $true
+$lblPWarrNote.Location     = New-Object System.Drawing.Point(8, 28)
+$lblPWarrNote.Size         = New-Object System.Drawing.Size(($PCOL - 2 * $BORDER - 16), 18)
+$pWarrantyFace.Controls.Add($lblPWarrNote)
+
 $lblPHint           = New-Object System.Windows.Forms.Label
 $lblPHint.Text      = "TYPE A SERIAL, PRESS ENTER.`r`n`r`n" +
                       "THE COMMODITY LIST THEN FILLS WITH`r`n" +
@@ -537,7 +574,7 @@ $lblPHint.Text      = "TYPE A SERIAL, PRESS ENTER.`r`n`r`n" +
 $lblPHint.Font      = $fontSub
 $lblPHint.ForeColor = $navy
 $lblPHint.AutoSize  = $true
-$lblPHint.Location  = New-Object System.Drawing.Point(0, 306)
+$lblPHint.Location  = New-Object System.Drawing.Point(0, 404)
 $partsPanel.Controls.Add($lblPHint)
 
 # ---- part numbers ----
@@ -624,21 +661,25 @@ function Set-Progress {
     $progFill.Size = New-Object System.Drawing.Size($w, $progTrack.ClientSize.Height)
 }
 
+function Get-WarrantyStatusText {
+    <#  Terse wording keeps the column narrow and suits the rest of the type. #>
+    param([string]$Status)
+    switch ($Status) {
+        'In warranty'     { return 'ACTIVE' }
+        'Out of warranty' { return 'EXPIRED' }
+        default           { return $Status.ToUpperInvariant() }
+    }
+}
+
 function Update-Grid {
     <#  Repaints the grid from $script:Results using the chosen date format. #>
     $grid.SuspendLayout()
     $grid.Rows.Clear()
 
     foreach ($r in $script:Results) {
-        $dateText = Format-WarrantyDate -Date $r.WarrantyEnd -Format (Get-CurrentFormat)
-        $note     = if ($r.Error) { $r.Error.ToUpperInvariant() } else { $r.WarrantyName }
-
-        # Terse wording keeps the column narrow and suits the rest of the type.
-        $statusText = switch ($r.Status) {
-            'In warranty'     { 'ACTIVE' }
-            'Out of warranty' { 'EXPIRED' }
-            default           { $r.Status.ToUpperInvariant() }
-        }
+        $dateText   = Format-WarrantyDate -Date $r.WarrantyEnd -Format (Get-CurrentFormat)
+        $note       = if ($r.Error) { $r.Error.ToUpperInvariant() } else { $r.WarrantyName }
+        $statusText = Get-WarrantyStatusText $r.Status
 
         $idx = $grid.Rows.Add($r.Serial, $dateText, $statusText, $r.Product, $note)
         $row = $grid.Rows[$idx]
@@ -772,6 +813,7 @@ function Invoke-Lookup {
 # ---- parts section ----
 $script:PartsList   = $null    # last Get-LenovoPartsList result, one serial
 $script:PartMatches = @()      # rows currently in the parts grid
+$script:PartWarranty = $null   # Get-LenovoWarranty result for the same serial
 $script:FillingCommodities = $false
 
 function Get-SelectedCommodity {
@@ -804,8 +846,46 @@ function Update-PartCommodities {
     }
 }
 
+function Get-PartWarranty {
+    <#
+        The device warranty for the serial on the parts side. It is its own
+        request, so a warranty hiccup never costs the parts list or the other
+        way round.
+    #>
+    param([string]$Serial)
+    try {
+        return @(Get-LenovoWarranty -SerialNumber $Serial)[0]
+    } catch {
+        return [pscustomobject]@{
+            Serial = $Serial; WarrantyEnd = $null; Status = ''; WarrantyName = ''
+            Error  = $_.Exception.Message
+        }
+    }
+}
+
+function Update-PartWarranty {
+    <#  The warranty card, in the date format picked on the warranty side. #>
+    $w = $script:PartWarranty
+    if (-not $w) {
+        $lblPWarrDate.Text = ''
+        $lblPWarrNote.Text = ''
+        return
+    }
+    if ($w.Error -or -not $w.WarrantyEnd) {
+        $lblPWarrDate.ForeColor = $magenta
+        $lblPWarrDate.Text      = 'NO END DATE'
+        $lblPWarrNote.Text      = ([string]$w.Error).ToUpperInvariant()
+        return
+    }
+    $date = Format-WarrantyDate -Date $w.WarrantyEnd -Format (Get-CurrentFormat)
+    $lblPWarrDate.ForeColor = $crimson
+    $lblPWarrDate.Text      = ("ENDS $date   " + (Get-WarrantyStatusText $w.Status)).TrimEnd()
+    $lblPWarrNote.Text      = [string]$w.WarrantyName
+}
+
 function Update-PartInfo {
     <#  The product card: what the serial resolved to, or why it did not. #>
+    Update-PartWarranty
     if (-not $script:PartsList) {
         $lblPInfo.Text = ''
         return
@@ -896,13 +976,16 @@ function Invoke-PartLookup {
     [System.Windows.Forms.Application]::DoEvents()
 
     try {
-        $script:PartsList = Get-LenovoPartsList -SerialNumber $serial
+        $script:PartWarranty = Get-PartWarranty $serial
+        $script:PartsList    = Get-LenovoPartsList -SerialNumber $serial
         Update-PartCommodities
         Update-PartGrid
     } catch {
-        $script:PartsList = $null
+        $script:PartsList   = $null
+        $script:PartMatches = @()
         $pgrid.Rows.Clear()
         Update-PartCommodities
+        Update-PartInfo
         Set-Status "FAILED: $($_.Exception.Message)" $magenta -Target $pstatus
     } finally {
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -961,10 +1044,14 @@ function Get-PartTableText {
     <#  Every match with the serial and product it belongs to, for Excel. #>
     if (-not $script:PartsList) { return '' }
     $lines = New-Object System.Collections.Generic.List[string]
-    [void]$lines.Add("Serial`tProduct`tPart Number`tDescription`tCommodity")
+    $ends = ''
+    if ($script:PartWarranty) {
+        $ends = Format-WarrantyDate -Date $script:PartWarranty.WarrantyEnd -Format (Get-CurrentFormat)
+    }
+    [void]$lines.Add("Serial`tProduct`tWarranty End`tPart Number`tDescription`tCommodity")
     foreach ($p in $script:PartMatches) {
-        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}" -f
-            $script:PartsList.Serial, $script:PartsList.Product,
+        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f
+            $script:PartsList.Serial, $script:PartsList.Product, $ends,
             $p.PartNumber, $p.Description, $p.Commodity))
     }
     return ($lines -join "`r`n")
@@ -1023,6 +1110,7 @@ $btnClear.Add_Click({
 
 $cboFmt.Add_SelectedIndexChanged({
     if ($script:Results.Count -gt 0) { Update-Grid }
+    Update-PartWarranty
 })
 
 $btnSaveCsv.Add_Click({
@@ -1075,8 +1163,9 @@ $btnDiagnose.Add_Click({ Invoke-PartDiagnose })
 $btnPClear.Add_Click({
     $txtPSerial.Clear()
     $pgrid.Rows.Clear()
-    $script:PartsList   = $null
-    $script:PartMatches = @()
+    $script:PartsList    = $null
+    $script:PartMatches  = @()
+    $script:PartWarranty = $null
     Update-PartCommodities
     Update-PartInfo
     foreach ($b in @($btnCopyPart, $btnCopyPTable)) { Set-BlockEnabled $b $false }
