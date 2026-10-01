@@ -67,7 +67,6 @@ keeps the rows that match the part you picked.
 | **Description** | Lenovo's own wording for the part |
 | **Commodity** | Lenovo's part family (covers, system boards, storage, ...) |
 | **Status** | Availability as Lenovo reports it; unavailable parts show magenta |
-| **Substitutes** | Replacement part numbers, when Lenovo lists any |
 
 The preset list: LCD panel, LCD back cover, LCD bezel, LCD cable, hinges,
 system board, power button board, I/O board, SSD, hard drive, memory,
@@ -87,8 +86,8 @@ dropdown re-filters it instantly.
 
 - **Copy part no.** — the part numbers in the grid, one per line. Select
   rows first to copy just those.
-- **Copy table** — serial, product, part number, description, commodity,
-  status and substitutes, tab separated with a header row.
+- **Copy table** — serial, product, part number, description, commodity
+  and status, tab separated with a header row.
 
 ## Look
 
@@ -219,7 +218,10 @@ keeps every object carrying a part number, so a bare list, a list under
 commodity name carried onto each part. A spreadsheet export is read straight
 out of the xlsx (it is only a zip of XML) — no Excel, no extra modules — and
 CSV is handled too. Columns are matched by wording (`FRU`, `Part Number`,
-`Description`, `Commodity`, ...) rather than position.
+`Description`, `Commodity`, ...) rather than position, and every column has
+a list of names it answers to, so a row whose first-choice field is empty
+falls back to the next one. The diagnostic report lists the field names the
+reply actually used, with a sample of each.
 
 ## Requirements
 

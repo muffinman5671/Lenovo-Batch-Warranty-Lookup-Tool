@@ -554,10 +554,9 @@ $partsPanel.Controls.Add($pGridBox)
 
 $pgrid = New-BrutalGrid -FillColumn 'Description' -Columns @(
     @{ N = 'PartNumber';  H = 'PART NO.';    W = 132 },
-    @{ N = 'Description'; H = 'DESCRIPTION'; W = 240 },
-    @{ N = 'Commodity';   H = 'COMMODITY';   W = 150 },
-    @{ N = 'Status';      H = 'STATUS';      W = 104 },
-    @{ N = 'Substitutes'; H = 'SUBSTITUTES'; W = 120 }
+    @{ N = 'Description'; H = 'DESCRIPTION'; W = 300 },
+    @{ N = 'Commodity';   H = 'COMMODITY';   W = 190 },
+    @{ N = 'Status';      H = 'STATUS';      W = 120 }
 )
 $pGridBox.Controls.Add($pgrid)
 
@@ -819,7 +818,7 @@ function Update-PartGrid {
     $pgrid.Rows.Clear()
     foreach ($p in $script:PartMatches) {
         $statusText = $p.Status.ToUpperInvariant()
-        $idx = $pgrid.Rows.Add($p.PartNumber, $p.Description, $p.Commodity, $statusText, $p.Substitutes)
+        $idx = $pgrid.Rows.Add($p.PartNumber, $p.Description, $p.Commodity, $statusText)
         $row = $pgrid.Rows[$idx]
 
         # The part number is what you came for, so it gets the loud colour.
@@ -941,11 +940,11 @@ function Get-PartTableText {
     <#  Every match with the serial and product it belongs to, for Excel. #>
     if (-not $script:PartsList) { return '' }
     $lines = New-Object System.Collections.Generic.List[string]
-    [void]$lines.Add("Serial`tProduct`tPart Number`tDescription`tCommodity`tStatus`tSubstitutes")
+    [void]$lines.Add("Serial`tProduct`tPart Number`tDescription`tCommodity`tStatus")
     foreach ($p in $script:PartMatches) {
-        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f
+        [void]$lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f
             $script:PartsList.Serial, $script:PartsList.Product,
-            $p.PartNumber, $p.Description, $p.Commodity, $p.Status, $p.Substitutes))
+            $p.PartNumber, $p.Description, $p.Commodity, $p.Status))
     }
     return ($lines -join "`r`n")
 }

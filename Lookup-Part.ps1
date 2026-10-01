@@ -112,7 +112,6 @@ $rows = @($result.Matches | ForEach-Object {
         Description = $_.Description
         Commodity   = $_.Commodity
         Status      = $_.Status
-        Substitutes = $_.Substitutes
         Cru         = $_.Cru
     }
 })
@@ -132,4 +131,4 @@ if ($PartNumbersOnly) {
     return
 }
 
-$rows | Select-Object PartNumber, Description, Commodity, Status, Substitutes
+$rows | Select-Object PartNumber, Description, Commodity, Status

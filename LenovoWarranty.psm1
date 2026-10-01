@@ -402,6 +402,12 @@ $script:PartsReferer   = 'https://pcsupport.lenovo.com/us/en/partslookup'
 # Lenovo puts above it.
 $script:PartsHeaderPattern = 'part\s*(number|no\b|no\.|#|num)|\bfru\b|descr'
 
+# What a part number property is called in JSON, and what its value looks
+# like (Lenovo FRU and option numbers mix letters and digits: 01AV430,
+# 5CB1H89763, 4X40E77322). A purely numeric id is not one.
+$script:PartNumberKeyPattern   = '(?i)fru|^pn$|pn$|^pn[_-]?|part_?(no|num|number|id|code)|material_?(no|num|number)|^sku$'
+$script:PartNumberValuePattern = '^(?=.*[A-Za-z])(?=.*\d)[0-9A-Za-z-]{5,14}$'
+
 Add-Type -AssemblyName System.IO.Compression            -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
 
@@ -887,8 +893,10 @@ function ConvertFrom-LenovoPartsJson {
         object that carries a part number: a bare array, an array under
         data/parts, or parts grouped under commodities all come out the same.
         A group's label (commodity, category, tier) is inherited by the parts
-        beneath it, and a nested list of substitute objects collapses to
-        their part numbers.
+        beneath it. Inside a part, a nested object is kept both as one value
+        (its part number or name) and as its own fields, dotted - so a
+        description tucked under detail.name is still found by name - and a
+        nested list of objects collapses to their labels.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Text)
@@ -896,11 +904,8 @@ function ConvertFrom-LenovoPartsJson {
     $parsed  = @(ConvertFrom-LenovoJsonList -Text $Text)
     $records = New-Object System.Collections.Generic.List[object]
 
-    # What a part number property is called, and what its value looks like
-    # (Lenovo FRU and option numbers mix letters and digits: 01AV430,
-    # 5CB1H89763, 4X40E77322). A purely numeric id is not one.
-    $pnKey = '(?i)fru|^pn$|pn$|^pn[_-]?|part_?(no|num|number|id|code)|material_?(no|num|number)|^sku$'
-    $pnVal = '^(?=.*[A-Za-z])(?=.*\d)[0-9A-Za-z-]{5,14}$'
+    $pnKey = $script:PartNumberKeyPattern
+    $pnVal = $script:PartNumberValuePattern
     $inheritKey = '(?i)commodity|categor|group|tier|section|class|family'
 
     $isScalar = { param($v) ($v -is [string]) -or ($v -is [ValueType]) }
@@ -941,7 +946,12 @@ function ConvertFrom-LenovoPartsJson {
                 $rec[$p.Name] = (@($items | Where-Object { $_ }) -join ', ')
                 continue
             }
-            if ($v -is [psobject]) { $rec[$p.Name] = & $labelOf $v }
+            if ($v -is [psobject]) {
+                $rec[$p.Name] = & $labelOf $v
+                foreach ($q in $v.PSObject.Properties) {
+                    if ($null -ne $q.Value -and (& $isScalar $q.Value)) { $rec["$($p.Name).$($q.Name)"] = [string]$q.Value }
+                }
+            }
         }
         foreach ($k in $Inherited.Keys) {
             if (-not $rec.Contains($k)) { $rec[$k] = $Inherited[$k] }
@@ -980,49 +990,118 @@ function ConvertFrom-LenovoPartsJson {
 }
 
 
+function Get-LenovoPartColumns {
+    <#
+        Works out which keys of a set of part records carry which field -
+        part number, description, commodity, status, CRU, price - by wording
+        rather than position. Each field gets every candidate key, best
+        first, so a record whose first-choice key is empty falls back to the
+        next one. The keys seen and a sample value of each come back too;
+        that is what the diagnostics print.
+    #>
+    [CmdletBinding()]
+    param([object[]] $Record)
+
+    $keys   = New-Object System.Collections.Generic.List[string]
+    $sample = @{}
+    foreach ($rec in $Record) {
+        if ($null -eq $rec) { continue }
+        $isDict = $rec -is [System.Collections.IDictionary]
+        $names  = if ($isDict) { @($rec.Keys) } else { @($rec.PSObject.Properties | ForEach-Object { $_.Name }) }
+        foreach ($n in $names) {
+            $k = [string]$n
+            if (-not $sample.ContainsKey($k)) { $sample[$k] = ''; [void]$keys.Add($k) }
+            if ($sample[$k] -eq '') {
+                $v = if ($isDict) { $rec[$n] } else { $rec.$n }
+                if ($null -ne $v) { $sample[$k] = ([string]$v).Trim() }
+            }
+        }
+    }
+
+    $pick = {
+        # Every key matching any pattern, in pattern order, minus the ones the
+        # exclusion rules out (an image URL or a count is never the field).
+        param([string[]] $Patterns, [string] $Exclude)
+        $found = New-Object System.Collections.Generic.List[string]
+        foreach ($pat in $Patterns) {
+            foreach ($k in $keys) {
+                if ($k -match $pat -and -not ($Exclude -and $k -match $Exclude) -and -not $found.Contains($k)) { [void]$found.Add($k) }
+            }
+        }
+        return $found.ToArray()
+    }
+
+    $map = [ordered]@{
+        PartNumber  = @(& $pick @('^\s*fru\s*(part)?\s*(number|no\.?|#|p/?n)?\s*$', 'part[s\s_-]*(number|no\b|no\.|#|num)', '^\s*p/?n\s*$', 'fru', 'partnumber|partno|partnum', '^\s*part\s*$', '^\s*number\s*$') `
+                                'subst|replac|alternat|supersed|parent|image|url|file|desc|name|count|total|list|qty|quantity')
+        Description = @(& $pick @('desc', 'part[s\s_-]*name', '^\s*name\s*$', 'title', '(fru|item|material)[\s_-]*name', 'name', 'label', '^text$|[\s_.-]text$', 'summary', 'info') `
+                                'commodit|categor|group|class|family|tier|section|product|model|serial|machine|brand|image|url|file|key|code|id$|html|short|user|operator|host|request')
+        Commodity   = @(& $pick @('commodity[\s_.-]*(name|desc|label|display|text)', 'commodity', 'categor', 'part[s\s_-]*type', '^\s*type\s*$', 'group', 'class', 'family') `
+                                'image|url|file|id$|count|total|filter|list|param')
+        Status      = @(& $pick @('^\s*status\s*$', 'availab', 'status', 'stock', 'orderable|purchas|sellable|saleable', 'eol|discontinu|lifecycle') `
+                                'image|url|file|code$|id$|date|time|msg|message|cost|price|qty|quantity|count')
+        Cru         = @(& $pick @('^\s*cru', 'cru[\s_-]*(tier|type|level)', '\bcru\b') 'image|url|file')
+        Price       = @(& $pick @('price', 'cost') 'image|url|file|currency|symbol|unit|type|id$|format')
+    }
+
+    return [pscustomobject]@{ Keys = $keys.ToArray(); Sample = $sample; Map = $map }
+}
+
+
+function Get-LenovoPartFieldsSummary {
+    <#
+        Three lines for the diagnostics: every field name seen with a sample
+        value, how each one was read, and the distinct record layouts. This
+        is what shows, from a report alone, why a column came back blank.
+    #>
+    [CmdletBinding()]
+    param([object[]] $Record)
+
+    $clip = { param([string] $v) if ($v.Length -gt 40) { $v.Substring(0, 40) + '...' } else { $v } }
+    $cols = Get-LenovoPartColumns -Record $Record
+    $lines = New-Object System.Collections.Generic.List[string]
+
+    $seen = foreach ($k in $cols.Keys) { "$k=`"$(& $clip $cols.Sample[$k])`"" }
+    [void]$lines.Add('fields seen: ' + ($seen -join ' | '))
+
+    $readAs = foreach ($f in @('PartNumber', 'Description', 'Commodity', 'Status', 'Cru', 'Price')) {
+        $c = @($cols.Map[$f])
+        "$f <- " + $(if ($c.Count -gt 0) { $c -join ' / ' } else { '(none)' })
+    }
+    [void]$lines.Add('read as: ' + ($readAs -join '; '))
+
+    $shapes = [ordered]@{}
+    foreach ($rec in $Record) {
+        if ($null -eq $rec) { continue }
+        $names = if ($rec -is [System.Collections.IDictionary]) { @($rec.Keys) } else { @($rec.PSObject.Properties | ForEach-Object { $_.Name }) }
+        $sig = (@($names | ForEach-Object { [string]$_ }) -join ', ')
+        if ($shapes.Contains($sig)) { $shapes[$sig]++ } else { $shapes[$sig] = 1 }
+    }
+    $desc = foreach ($sig in $shapes.Keys) { "$($shapes[$sig]) x [$sig]" }
+    [void]$lines.Add('record layouts: ' + ($desc -join '; '))
+
+    return $lines.ToArray()
+}
+
+
 function ConvertTo-LenovoPartRows {
     <#
         Maps whatever column names the export uses onto the fixed set the
-        tool reports: PartNumber, Description, Commodity, Substitutes, Status,
-        Cru, Price. Column matching is by wording so a renamed header or a
-        reordered sheet does not break anything.
+        tool reports: PartNumber, Description, Commodity, Status, Cru, Price.
+        Column matching is by wording (Get-LenovoPartColumns) so a renamed
+        header or a reordered sheet does not break anything, and each field
+        takes the first of its candidate keys that holds a value in that
+        record. A record with no part number at all is dropped: the part
+        number is the point.
     #>
     [CmdletBinding()]
     param([object[]] $Record)
 
     if ($null -eq $Record -or $Record.Count -eq 0) { return @() }
 
-    # Column names are the union over every record, in first-seen order:
-    # parts pulled out of grouped JSON do not all carry the same keys.
-    $keys = New-Object System.Collections.Generic.List[string]
-    $seen = @{}
-    foreach ($rec in $Record) {
-        $names = if ($rec -is [System.Collections.IDictionary]) { @($rec.Keys) } else { @($rec.PSObject.Properties | ForEach-Object { $_.Name }) }
-        foreach ($n in $names) {
-            if (-not $seen.ContainsKey([string]$n)) { $seen[[string]$n] = $true; [void]$keys.Add([string]$n) }
-        }
-    }
-
-    $pick = {
-        param([string[]] $Patterns)
-        foreach ($pat in $Patterns) {
-            foreach ($k in $keys) {
-                if (([string]$k) -match $pat) { return [string]$k }
-            }
-        }
-        return $null
-    }
-
-    $map = @{
-        PartNumber  = & $pick @('^\s*fru\s*(part)?\s*(number|no\.?|#|p/?n)?\s*$', 'part\s*(number|no\b|no\.|#|num)', '^\s*p/?n\s*$', 'fru', 'partnumber|partno|partnum', '^\s*part\s*$', '^\s*number\s*$')
-        Description = & $pick @('desc', 'part\s*name', '^\s*name\s*$', 'title')
-        Commodity   = & $pick @('commodity', 'categor', 'part\s*type', '^\s*type\s*$', 'group', 'class', 'family')
-        Substitutes = & $pick @('subst', 'replac', 'alternat', 'supersed')
-        Status      = & $pick @('^\s*status\s*$', 'availab', 'status', 'stock', 'orderable')
-        Cru         = & $pick @('^\s*cru', 'cru\s*(tier|type|level)', '\bcru\b')
-        Price       = & $pick @('price', 'cost')
-    }
-    if (-not $map.PartNumber) { throw "No part number column in: $($keys -join ', ')" }
+    $cols = Get-LenovoPartColumns -Record $Record
+    $map  = $cols.Map
+    if (@($map['PartNumber']).Count -eq 0) { throw "No part number column in: $($cols.Keys -join ', ')" }
 
     $get = {
         param($Rec, [string] $Key)
@@ -1032,19 +1111,51 @@ function ConvertTo-LenovoPartRows {
         if ($null -eq $v) { return '' }
         return ([string]$v).Trim()
     }
+    $first = {
+        param($Rec, [string[]] $Keys)
+        foreach ($k in $Keys) { $v = & $get $Rec $k; if ($v) { return $v } }
+        return ''
+    }
+    $statusOf = {
+        # Lenovo may say "Available", or answer a yes/no question such as
+        # inStock or discontinued; either way it comes out as a word.
+        param($Rec, [string[]] $Keys)
+        foreach ($k in $Keys) {
+            $v = & $get $Rec $k
+            if (-not $v) { continue }
+            $flag = $null
+            if ($v -match '^(true|yes|y)$')     { $flag = $true }
+            elseif ($v -match '^(false|no|n)$') { $flag = $false }
+            elseif ($v -match '^[01]$' -and $k -match 'avail|stock|orderable|purchas|sell|eol|discontinu') { $flag = ($v -eq '1') }
+            if ($null -eq $flag) { return $v }
+            if ($k -match 'eol|discontinu|unavail|out[\s_-]*of[\s_-]*stock|sold[\s_-]*out|not[\s_-]*avail|^no[\s_-]') { $flag = -not $flag }
+            if ($flag) { return 'Available' } else { return 'Unavailable' }
+        }
+        return ''
+    }
 
     $rows = foreach ($rec in $Record) {
-        $pn = (& $get $rec $map.PartNumber) -replace '\s+', ''
-        $ds = & $get $rec $map.Description
-        if (-not $pn -and -not $ds) { continue }
+        $pn = (& $first $rec $map['PartNumber']) -replace '\s+', ''
+        if (-not $pn) {
+            # Nothing under the usual names: take any part-number-looking
+            # value under a part-number-ish key, which is what got the
+            # record kept in the first place.
+            $names = if ($rec -is [System.Collections.IDictionary]) { @($rec.Keys) } else { @($rec.PSObject.Properties | ForEach-Object { $_.Name }) }
+            foreach ($k in $names) {
+                if ([string]$k -match $script:PartNumberKeyPattern) {
+                    $v = (& $get $rec ([string]$k)) -replace '\s+', ''
+                    if ($v -match $script:PartNumberValuePattern) { $pn = $v; break }
+                }
+            }
+        }
+        if (-not $pn) { continue }
         [pscustomobject]@{
             PartNumber  = $pn.ToUpperInvariant()
-            Description = $ds
-            Commodity   = & $get $rec $map.Commodity
-            Substitutes = & $get $rec $map.Substitutes
-            Status      = & $get $rec $map.Status
-            Cru         = & $get $rec $map.Cru
-            Price       = & $get $rec $map.Price
+            Description = & $first $rec $map['Description']
+            Commodity   = & $first $rec $map['Commodity']
+            Status      = & $statusOf $rec $map['Status']
+            Cru         = & $first $rec $map['Cru']
+            Price       = & $first $rec $map['Price']
         }
     }
     return @($rows)
@@ -1215,7 +1326,7 @@ function Get-LenovoPartsList {
         Resolves the serial to its machine type and model, then pulls the
         parts list Lenovo's parts lookup page offers as "Download parts list".
         Returns one object carrying the product details and a Parts array of
-        PartNumber / Description / Commodity / Substitutes / Status rows.
+        PartNumber / Description / Commodity / Status / Cru / Price rows.
         Problems are reported in Error rather than thrown.
 
     .EXAMPLE
@@ -1338,7 +1449,12 @@ function Get-LenovoPartsList {
             }
             $read = Read-LenovoPartsPayload -Response $resp
             if ($read.Records.Count -gt 0) {
-                [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($read.Source), $($read.Records.Count) records")
+                # The winning reply is sketched too, with the field names it
+                # used, so a blank column can be traced from the report alone.
+                $detail = ''
+                if ($read.Source -eq 'json') { $detail = '; shape: ' + (Get-LenovoJsonShape -Text $resp.Text -MaxLength 1500) }
+                [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($read.Source), $($read.Records.Count) records$detail")
+                foreach ($l in (Get-LenovoPartFieldsSummary -Record $read.Records)) { [void]$log.Add("   $l") }
                 $payload = $read
                 break
             }
@@ -1568,4 +1684,5 @@ Export-ModuleMember -Function Get-LenovoWarranty, ConvertTo-SerialList,
                               ConvertFrom-LenovoDelimited, ConvertFrom-LenovoPartsJson,
                               ConvertFrom-LenovoJsonList, Read-LenovoPartsPayload,
                               Find-LenovoPartsEndpoint, Get-LenovoPartsDiagnostic,
-                              Get-LenovoJsonShape, Get-LenovoCruTiers
+                              Get-LenovoJsonShape, Get-LenovoCruTiers,
+                              Get-LenovoPartColumns, Get-LenovoPartFieldsSummary
