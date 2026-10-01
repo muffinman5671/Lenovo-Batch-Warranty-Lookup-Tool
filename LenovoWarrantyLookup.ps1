@@ -609,9 +609,8 @@ $btnFind       = New-BrutalButton -Text 'FIND PART'     -X 0   -Width 132 -Fill 
 $btnCopyPart   = New-BrutalButton -Text 'COPY PART NO.' -X 146 -Width 152 -Fill $magenta -Ink $paper
 $btnCopyPTable = New-BrutalButton -Text 'COPY TABLE'    -X 312 -Width 132 -Fill $paper   -Ink $navy
 $btnPClear     = New-BrutalButton -Text 'CLEAR'         -X 458 -Width  94 -Fill $paper   -Ink $navy
-$btnDiagnose   = New-BrutalButton -Text 'DIAGNOSE'      -X 566 -Width 118 -Fill $paper   -Ink $navy
 
-foreach ($b in @($btnFind, $btnCopyPart, $btnCopyPTable, $btnPClear, $btnDiagnose)) {
+foreach ($b in @($btnFind, $btnCopyPart, $btnCopyPTable, $btnPClear)) {
     $pbar.Controls.Add($b.Tag.Shadow)
     $pbar.Controls.Add($b)
     $b.BringToFront()
@@ -896,12 +895,10 @@ function Update-PartInfo {
         $text = "$($r.Serial)`r`n`r`n$($r.Error.ToUpperInvariant())"
         if ($r.PSObject.Properties['Raw'] -and $r.Raw) {
             # What Lenovo actually sent, so a wrong guess about the endpoint
-            # is visible in the window rather than silent. The command line's
-            # -Diagnose switch has the full story.
+            # is visible in the window rather than silent.
             $raw = ([string]$r.Raw -split "`n")[0] -replace '^\d+\. ', ''
             if ($raw.Length -gt 150) { $raw = $raw.Substring(0, 150) + '...' }
             $text += "`r`n`r`nLENOVO SAID: $raw"
-            $text += "`r`n`r`nPRESS DIAGNOSE FOR THE FULL REPORT"
         }
         $lblPInfo.Text = $text
         return
@@ -991,41 +988,6 @@ function Invoke-PartLookup {
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
         Set-BlockEnabled $btnFind   $true
         Set-BlockEnabled $btnPClear $true
-    }
-}
-
-function Invoke-PartDiagnose {
-    <#
-        Writes the diagnostic report for the typed serial next to the script
-        and opens it in Notepad, so what Lenovo answered can be pasted into a
-        bug report without touching the command line.
-    #>
-    $serials = @(ConvertTo-SerialList -Text $txtPSerial.Text)
-    if ($serials.Count -eq 0) {
-        Set-Status 'ENTER A SERIAL FIRST' $magenta -Target $pstatus
-        return
-    }
-    $serial = $serials[0]
-
-    foreach ($b in @($btnFind, $btnPClear, $btnCopyPart, $btnCopyPTable, $btnDiagnose)) { Set-BlockEnabled $b $false }
-    Set-Status 'SCANNING LENOVO - TAKES A MINUTE' $navy -Target $pstatus
-    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-    [System.Windows.Forms.Application]::DoEvents()
-
-    try {
-        $cached = if ($script:PartsList -and $script:PartsList.Serial -eq $serial) { $script:PartsList } else { $null }
-        $report = @(Get-LenovoPartsDiagnostic -SerialNumber $serial -PartsList $cached)
-        $path   = Join-Path $here "Lenovo parts diagnostics $(Get-Date -Format 'yyyy-MM-dd').txt"
-        $report | Set-Content -LiteralPath $path -Encoding UTF8
-        Start-Process -FilePath 'notepad.exe' -ArgumentList ('"' + $path + '"')
-        Set-Status 'REPORT OPENED IN NOTEPAD' $crimson -Target $pstatus
-    } catch {
-        Set-Status "DIAGNOSE FAILED: $($_.Exception.Message)" $magenta -Target $pstatus
-    } finally {
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
-        foreach ($b in @($btnFind, $btnPClear, $btnDiagnose)) { Set-BlockEnabled $b $true }
-        $have = $script:PartMatches.Count -gt 0
-        foreach ($b in @($btnCopyPart, $btnCopyPTable)) { Set-BlockEnabled $b $have }
     }
 }
 
@@ -1157,8 +1119,6 @@ $btnCopyPart.Add_Click({
 })
 
 $btnCopyPTable.Add_Click({ Copy-ToClipboardSafe -Text (Get-PartTableText) -Label 'TABLE' -Target $pstatus })
-
-$btnDiagnose.Add_Click({ Invoke-PartDiagnose })
 
 $btnPClear.Add_Click({
     $txtPSerial.Clear()

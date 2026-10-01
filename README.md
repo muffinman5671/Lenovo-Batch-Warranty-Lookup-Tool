@@ -113,7 +113,7 @@ These are PowerShell scripts. From a PowerShell window run them as shown
 below; from a plain Command Prompt, go through `powershell` instead:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\Lookup-Part.ps1" PF0ABCDE -Diagnose
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\Lookup-Part.ps1" PF0ABCDE
 ```
 
 For scripted use or very large batches:
@@ -161,7 +161,6 @@ Get-LenovoPartCommodity (Get-LenovoPartsList PF0ABCDE).Parts
 | File | Purpose |
 |---|---|
 | `Lenovo Warranty Lookup.cmd` | Double-click launcher for the GUI |
-| `Lenovo Parts Diagnostics.cmd` | Double-click launcher for the part lookup diagnostic |
 | `LenovoWarrantyLookup.ps1` | The GUI |
 | `Lookup-Warranty.ps1` | Command line front end for warranty lookup |
 | `Lookup-Part.ps1` | Command line front end for part lookup |
@@ -224,8 +223,7 @@ out of the xlsx (it is only a zip of XML) — no Excel, no extra modules — and
 CSV is handled too. Columns are matched by wording (`FRU`, `Part Number`,
 `Description`, `Commodity`, ...) rather than position, and every column has
 a list of names it answers to, so a row whose first-choice field is empty
-falls back to the next one. The diagnostic report lists the field names the
-reply actually used, with a sample of each.
+falls back to the next one.
 
 ## Requirements
 
@@ -242,21 +240,16 @@ Windows PowerShell 5.1 (built into Windows) and internet access to
   scripts make, read out of those scripts rather than documented. If they
   change, `$script:PartsApiBase`, the attempt list in `Get-LenovoPartsList`,
   and the column patterns in `ConvertTo-LenovoPartRows` are the places to
-  look, and the **Diagnose** report shows what the page calls now.
+  look.
 - The commodity dropdown is only as good as Lenovo's grouping. A part filed
   under an unexpected commodity is still in the list — **All parts** is
   always there as the backstop.
 - When a part lookup fails, the product card in the GUI shows what Lenovo
-  answered the first attempt. The **Diagnose** block (or
-  `.\Lookup-Part.ps1 <serial> -Diagnose`, or double-clicking
-  `Lenovo Parts Diagnostics.cmd`) writes a report with what every attempt
-  got back, then scans the product's parts page and the scripts it loads
-  for the parts API the site itself calls. The report lands next to the
-  script as `Lenovo parts diagnostics <date>.txt`; the GUI opens it in
-  Notepad. A valid serial coming back "not found" with a reply of `[]`
-  means Lenovo's product resolver has no record of it; "Lenovo refused the
-  parts list" means the export wants something the tool is not sending, and
-  the scan is what shows what that is.
+  answered the first attempt, and `.\Lookup-Part.ps1 <serial> -Verbose`
+  prints what every attempt got back. A valid serial coming back "not
+  found" with a reply of `[]` means Lenovo's product resolver has no record
+  of it; "Lenovo refused the parts list" means the parts call wants
+  something the tool is not sending.
 - Serials are normalised to uppercase; blank lines, commas, tabs and stray
   quotes in pasted input are handled.
 - Duplicate serials are deliberately **kept**, so the output stays row-for-row

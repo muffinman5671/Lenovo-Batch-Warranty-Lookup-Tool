@@ -515,7 +515,7 @@ function ConvertFrom-LenovoJsonList {
 
 
 function Get-LenovoResponseSummary {
-    <#  One line saying what Lenovo actually sent, for the diagnostics. #>
+    <#  One line saying what Lenovo actually sent, for the attempt log. #>
     param($Response)
 
     $snippet = ''
@@ -986,8 +986,7 @@ function Get-LenovoPartColumns {
         part number, description, commodity, CRU, price - by wording
         rather than position. Each field gets every candidate key, best
         first, so a record whose first-choice key is empty falls back to the
-        next one. The keys seen and a sample value of each come back too;
-        that is what the diagnostics print.
+        next one. The keys seen and a sample value of each come back too.
     #>
     [CmdletBinding()]
     param([object[]] $Record)
@@ -1036,42 +1035,6 @@ function Get-LenovoPartColumns {
     }
 
     return [pscustomobject]@{ Keys = $keys.ToArray(); Sample = $sample; Map = $map }
-}
-
-
-function Get-LenovoPartFieldsSummary {
-    <#
-        Three lines for the diagnostics: every field name seen with a sample
-        value, how each one was read, and the distinct record layouts. This
-        is what shows, from a report alone, why a column came back blank.
-    #>
-    [CmdletBinding()]
-    param([object[]] $Record)
-
-    $clip = { param([string] $v) if ($v.Length -gt 40) { $v.Substring(0, 40) + '...' } else { $v } }
-    $cols = Get-LenovoPartColumns -Record $Record
-    $lines = New-Object System.Collections.Generic.List[string]
-
-    $seen = foreach ($k in $cols.Keys) { "$k=`"$(& $clip $cols.Sample[$k])`"" }
-    [void]$lines.Add('fields seen: ' + ($seen -join ' | '))
-
-    $readAs = foreach ($f in @('PartNumber', 'Description', 'Commodity', 'Cru', 'Price')) {
-        $c = @($cols.Map[$f])
-        "$f <- " + $(if ($c.Count -gt 0) { $c -join ' / ' } else { '(none)' })
-    }
-    [void]$lines.Add('read as: ' + ($readAs -join '; '))
-
-    $shapes = [ordered]@{}
-    foreach ($rec in $Record) {
-        if ($null -eq $rec) { continue }
-        $names = if ($rec -is [System.Collections.IDictionary]) { @($rec.Keys) } else { @($rec.PSObject.Properties | ForEach-Object { $_.Name }) }
-        $sig = (@($names | ForEach-Object { [string]$_ }) -join ', ')
-        if ($shapes.Contains($sig)) { $shapes[$sig]++ } else { $shapes[$sig] = 1 }
-    }
-    $desc = foreach ($sig in $shapes.Keys) { "$($shapes[$sig]) x [$sig]" }
-    [void]$lines.Add('record layouts: ' + ($desc -join '; '))
-
-    return $lines.ToArray()
 }
 
 
@@ -1157,7 +1120,7 @@ function ConvertTo-LenovoPartRows {
 function Get-LenovoJsonShape {
     <#
         A compact sketch of a JSON document - keys, nesting, array sizes and
-        a sample of each value - for the diagnostics. Enough to see where a
+        a sample of each value - for the attempt log. Enough to see where a
         list lives and what its fields are called without dumping it all.
     #>
     [CmdletBinding()]
@@ -1441,19 +1404,14 @@ function Get-LenovoPartsList {
             }
             $read = Read-LenovoPartsPayload -Response $resp
             if ($read.Records.Count -gt 0) {
-                # The winning reply is sketched too, with the field names it
-                # used, so a blank column can be traced from the report alone.
-                $detail = ''
-                if ($read.Source -eq 'json') { $detail = '; shape: ' + (Get-LenovoJsonShape -Text $resp.Text -MaxLength 3000) }
-                [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($read.Source), $($read.Records.Count) records$detail")
-                foreach ($l in (Get-LenovoPartFieldsSummary -Record $read.Records)) { [void]$log.Add("   $l") }
+                [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($read.Source), $($read.Records.Count) records")
                 $payload = $read
                 break
             }
             $detail = ''
             if ($read.Source -eq 'json' -and $read.Reason -notmatch '^Lenovo said') {
-                # What came back, sketched, so an unexpected layout is visible
-                # in the diagnostics rather than a dead end.
+                # What came back, sketched, so an unexpected layout shows in
+                # the error rather than a dead end.
                 $detail = '; shape: ' + (Get-LenovoJsonShape -Text $resp.Text)
             }
             [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($resp.ContentType): $($read.Reason)$detail")
@@ -1474,8 +1432,6 @@ function Get-LenovoPartsList {
             return [pscustomobject]$out
         }
 
-        # Raw keeps the attempt log even on success, so the diagnostics can
-        # say which shape worked; the GUI only shows it on failure.
         $out.Source = $payload.Source
         $out.Parts  = @(ConvertTo-LenovoPartRows -Record $payload.Records)
         if ($out.Parts.Count -eq 0) { $out.Error = 'No parts listed for this serial' }
@@ -1486,151 +1442,6 @@ function Get-LenovoPartsList {
     }
 
     return [pscustomobject]$out
-}
-
-
-function Find-LenovoPartsEndpoint {
-    <#
-    .SYNOPSIS
-        Diagnostic: scans a product's parts page and its scripts for the parts
-        API the site itself calls.
-
-    .DESCRIPTION
-        Resolves the serial, fetches the product's parts page, then every
-        script it loads from lenovo.com, and lists each api/v4 path mentioning
-        parts, every mention of upsellAggregation with its surroundings, and
-        whether the page HTML itself carries part numbers. Returns lines of
-        text meant to be pasted into a bug report.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory, Position = 0)] [string] $SerialNumber,
-        [int] $TimeoutSec = 90,
-        [int] $MaxScripts = 30
-    )
-
-    $lines  = New-Object System.Collections.Generic.List[string]
-    $client = New-LenovoHttpClient -TimeoutSec $TimeoutSec
-
-    $addHits = {
-        param([string] $Text, [string] $Label)
-        if (-not $Text) { return }
-        # The query string is kept when the code spells one out, because the
-        # parameter names are half of what needs knowing.
-        $paths = @([regex]::Matches($Text, '(?i)/?api/v\d+/[A-Za-z0-9_./${}-]*part[A-Za-z0-9_./${}?&=-]*') |
-                   ForEach-Object { $_.Value } | Sort-Object -Unique)
-        foreach ($hit in $paths) { [void]$lines.Add("  [$Label] api path: $hit") }
-        $ctx = @([regex]::Matches($Text, '.{0,120}upsellAggregation.{0,200}') | ForEach-Object { $_.Value } | Select-Object -First 25)
-        foreach ($c in $ctx) { [void]$lines.Add("  [$Label] upsellAggregation context: " + (($c -replace '\s+', ' ').Trim())) }
-        # The calls the tool relies on, with enough around them to read the
-        # whole request body and anything the export wants (cruTiers).
-        foreach ($kw in 'parts/asBuilt', 'parts/export', 'cruTier', 'exportPartsCruTiers', 'userCart.source', 'userCart =', 'userCart={') {
-            $near = @([regex]::Matches($Text, '(?i).{0,300}' + [regex]::Escape($kw) + '.{0,700}') | ForEach-Object { $_.Value } | Select-Object -First 8)
-            foreach ($c in $near) { [void]$lines.Add("  [$Label] near $kw`: " + (($c -replace '\s+', ' ').Trim())) }
-        }
-    }
-
-    try {
-        $product = Get-LenovoProduct -SerialNumber $SerialNumber -Client $client
-        if ($product.Error) {
-            [void]$lines.Add("Product: $($product.Error) | $($product.Raw)")
-            return $lines.ToArray()
-        }
-        [void]$lines.Add("Product: $($product.Product) | type $($product.MachineType) | model $($product.Model) | id $($product.ProductId)")
-
-        $pageUrl = "$($script:SiteBase)/us/en/products/$($product.ProductId)/parts"
-
-        # The page's configuration call, in full: it is where the CRU tier
-        # codes and any other filter values the parts calls expect would be.
-        $xhr    = @{ 'X-Requested-With' = 'XMLHttpRequest'; 'Origin' = $script:SiteBase }
-        $config = Invoke-LenovoRequest -Client $client -Url "$($script:PartsApiBase)/config" -Method POST `
-                                       -Accept 'application/json, */*' -Referer $pageUrl -Headers $xhr -Body '{}'
-        $cfgText = ($config.Text -replace '\s+', ' ').Trim()
-        if ($cfgText.Length -gt 3000) { $cfgText = $cfgText.Substring(0, 3000) + '...' }
-        [void]$lines.Add("parts/config -> HTTP $($config.StatusCode) $($config.ContentType) $($config.Error): $cfgText")
-
-        $page    = Invoke-LenovoRequest -Client $client -Url $pageUrl -Accept 'text/html, */*'
-        [void]$lines.Add("Parts page: $pageUrl -> HTTP $($page.StatusCode) $($page.ContentType), $($page.Bytes.Length) bytes $($page.Error)")
-        if (-not $page.Text) { return $lines.ToArray() }
-
-        # FRU numbers are 7 or 10 characters, start with a digit, mix in letters:
-        # 01AV430, 45N0346, 5CB1H89763, 5M10Z39781.
-        $frus = @([regex]::Matches($page.Text, '\b\d(?:[A-Z0-9]{6}|[A-Z0-9]{9})\b') |
-                  ForEach-Object { $_.Value } | Where-Object { $_ -match '[A-Z]' } | Sort-Object -Unique)
-        $eg   = if ($frus.Count -gt 0) { ' e.g. ' + (($frus | Select-Object -First 6) -join ', ') } else { '' }
-        [void]$lines.Add("Part-number-looking tokens in the page HTML: $($frus.Count)$eg")
-        & $addHits $page.Text 'page'
-
-        $srcs = @([regex]::Matches($page.Text, '(?i)<script[^>]+src\s*=\s*["'']([^"'']+)["'']') |
-                  ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-        $base = [Uri]$pageUrl
-        $urls = @()
-        foreach ($src in $srcs) {
-            $u = $null
-            # Only the site's own scripts and Lenovo's CDNs; third party tags
-            # (analytics, chat widgets) cannot know the parts API.
-            if ([Uri]::TryCreate($base, $src, [ref]$u) -and
-                ($u.Host -eq $base.Host -or $u.Host -match 'lenovo\.com$')) { $urls += $u.AbsoluteUri }
-        }
-        $urls = @($urls | Sort-Object -Unique | Select-Object -First $MaxScripts)
-        [void]$lines.Add("Scripts on the page: $($srcs.Count), scanning $($urls.Count) from the site or lenovo.com")
-
-        foreach ($u in $urls) {
-            $js = Invoke-LenovoRequest -Client $client -Url $u -Accept '*/*'
-            $name = ($u -split '/')[-1]
-            if ($name.Length -gt 60) { $name = $name.Substring(0, 60) }
-            $before = $lines.Count
-            if ($js.Text) { & $addHits $js.Text $name }
-            [void]$lines.Add("  script $name -> HTTP $($js.StatusCode), $($js.Bytes.Length) bytes, $($lines.Count - $before) hits")
-        }
-    } catch {
-        [void]$lines.Add("Scan failed: $($_.Exception.Message)")
-    } finally {
-        $client.Dispose()
-    }
-
-    return $lines.ToArray()
-}
-
-
-function Get-LenovoPartsDiagnostic {
-    <#
-    .SYNOPSIS
-        Builds the diagnostic report for one serial: what each download
-        attempt got back, then the scan of the parts page and its scripts.
-
-    .DESCRIPTION
-        Returns lines of text. Pass -PartsList to reuse a result already in
-        hand rather than downloading again. Both the GUI's DIAGNOSE block and
-        Lookup-Part.ps1 -Diagnose print and save exactly this.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory, Position = 0)] [string] $SerialNumber,
-        $PartsList
-    )
-
-    $serial = $SerialNumber.Trim().ToUpperInvariant()
-    if (-not $PartsList -or $PartsList.Serial -ne $serial) {
-        $PartsList = Get-LenovoPartsList -SerialNumber $serial
-    }
-
-    $lines = New-Object System.Collections.Generic.List[string]
-    [void]$lines.Add("Lenovo part lookup diagnostics - $(Get-Date -Format 'yyyy-MM-dd HH:mm') - PowerShell $($PSVersionTable.PSVersion)")
-    [void]$lines.Add("Serial: $serial")
-    if ($PartsList.Error) {
-        [void]$lines.Add("Result: $($PartsList.Error)")
-    } else {
-        [void]$lines.Add("Result: OK - $($PartsList.Parts.Count) parts via $($PartsList.Source) for $($PartsList.Product)")
-    }
-    if ($PartsList.Raw) {
-        [void]$lines.Add('What each attempt got back:')
-        foreach ($l in ([string]$PartsList.Raw -split "`n")) { [void]$lines.Add("  $l") }
-    }
-    [void]$lines.Add('Scan of the parts page and its scripts:')
-    foreach ($l in (Find-LenovoPartsEndpoint -SerialNumber $serial)) { [void]$lines.Add("  $l") }
-
-    return $lines.ToArray()
 }
 
 
@@ -1693,7 +1504,5 @@ Export-ModuleMember -Function Get-LenovoWarranty, ConvertTo-SerialList,
                               ConvertTo-LenovoPartRows, ConvertFrom-LenovoXlsx,
                               ConvertFrom-LenovoDelimited, ConvertFrom-LenovoPartsJson,
                               ConvertFrom-LenovoJsonList, Read-LenovoPartsPayload,
-                              Find-LenovoPartsEndpoint, Get-LenovoPartsDiagnostic,
                               Get-LenovoJsonShape, Get-LenovoCruTiers,
-                              Get-LenovoPartColumns, Get-LenovoPartFieldsSummary,
-                              ConvertTo-LenovoCruName
+                              Get-LenovoPartColumns, ConvertTo-LenovoCruName
