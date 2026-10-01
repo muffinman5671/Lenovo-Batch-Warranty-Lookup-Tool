@@ -781,7 +781,15 @@ function Update-PartInfo {
     $r = $script:PartsList
     if ($r.Error) {
         $lblPInfo.ForeColor = $magenta
-        $lblPInfo.Text      = "$($r.Serial)`r`n`r`n$($r.Error.ToUpperInvariant())"
+        $text = "$($r.Serial)`r`n`r`n$($r.Error.ToUpperInvariant())"
+        if ($r.PSObject.Properties['Raw'] -and $r.Raw) {
+            # What Lenovo actually sent, so a wrong guess about the endpoint
+            # is visible in the window rather than silent.
+            $raw = $r.Raw
+            if ($raw.Length -gt 150) { $raw = $raw.Substring(0, 150) + '...' }
+            $text += "`r`n`r`nLENOVO SAID: $raw"
+        }
+        $lblPInfo.Text = $text
         return
     }
     $lblPInfo.ForeColor = $navy

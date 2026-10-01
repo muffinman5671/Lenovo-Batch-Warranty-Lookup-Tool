@@ -72,7 +72,12 @@ if ($serial.Count -ne 1) { throw 'Give exactly one serial number.' }
 Write-Verbose "Looking up '$Part' for $($serial[0])."
 $result = Find-LenovoPart -SerialNumber $serial[0] -Part $Part
 
-if ($result.Error) { throw "$($serial[0]): $($result.Error)" }
+if ($result.Error) {
+    # -Verbose shows what Lenovo actually sent back, which is what you need
+    # when a serial you know is good comes back "not found".
+    if ($result.Raw) { Write-Verbose "Lenovo replied: $($result.Raw)" }
+    throw "$($serial[0]): $($result.Error) (run with -Verbose to see Lenovo's reply)"
+}
 
 Write-Verbose ("{0} - type {1}, model {2}: {3} parts listed, {4} matching" -f
     $result.Product, $result.MachineType, $result.Model, $result.Parts.Count, $result.Matches.Count)

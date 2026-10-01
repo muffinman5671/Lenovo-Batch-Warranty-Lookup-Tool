@@ -514,6 +514,43 @@ function Select-LenovoPart {
 }
 
 
+function ConvertFrom-LenovoJsonList {
+    <#
+        ConvertFrom-Json with the top level always handed back as an array of
+        items. Windows PowerShell 5.1 emits a JSON array as ONE object (so
+        wrapping it in @() nests it one level deep), while PowerShell 7
+        unrolls it onto the pipeline. Either way this returns the elements.
+        A JSON object comes back as a one element array.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $Text)
+
+    $parsed = @($Text | ConvertFrom-Json)
+    while ($parsed.Count -eq 1 -and $null -ne $parsed[0] -and $parsed[0] -is [array]) {
+        $parsed = @($parsed[0])
+    }
+
+    # Emitted element by element on purpose: callers wrap the call in @(),
+    # which then yields a flat array on both 5.1 and 7.
+    return $parsed
+}
+
+
+function Get-LenovoResponseSummary {
+    <#  One line saying what Lenovo actually sent, for the diagnostics. #>
+    param($Response)
+
+    $snippet = ''
+    if ($Response.Text) {
+        $snippet = ($Response.Text -replace '\s+', ' ').Trim()
+        if ($snippet.Length -gt 400) { $snippet = $snippet.Substring(0, 400) + '...' }
+    } elseif ($Response.Bytes -and $Response.Bytes.Length -gt 0) {
+        $snippet = "<$($Response.Bytes.Length) bytes of binary>"
+    }
+    return "HTTP $($Response.StatusCode) $($Response.ContentType) $snippet".Trim()
+}
+
+
 function Invoke-LenovoRequest {
     <#
         One HTTP round trip, returned as a flat object rather than thrown, so
@@ -603,6 +640,7 @@ function Get-LenovoProduct {
         MachineType = ''      # e.g. 21AH
         Model       = ''      # e.g. 21AH00BBUS
         Error       = ''
+        Raw         = ''      # what Lenovo sent, kept when something goes wrong
     }
 
     if (-not $serial) {
@@ -617,15 +655,14 @@ function Get-LenovoProduct {
         $url  = $script:ProductsUrl + '?productId=' + [Uri]::EscapeDataString($serial)
         $resp = Invoke-LenovoRequest -Client $Client -Url $url -Referer $script:PartsReferer
 
+        $row.Raw = Get-LenovoResponseSummary $resp
         if ($resp.Error) {
             $row.Error = $resp.Error
             return [pscustomobject]$row
         }
 
         try {
-            # Gathered into an array: PowerShell 7 unrolls a JSON array on the
-            # pipeline, 5.1 does not, and this makes both look the same.
-            $parsed = @($resp.Text | ConvertFrom-Json)
+            $parsed = @(ConvertFrom-LenovoJsonList -Text $resp.Text)
         } catch {
             $row.Error = 'Unreadable response from Lenovo'
             return [pscustomobject]$row
@@ -637,6 +674,9 @@ function Get-LenovoProduct {
             $parsed[0].PSObject.Properties['data'] -and
             -not ($parsed[0].PSObject.Properties['Id'] -or $parsed[0].PSObject.Properties['id'])) {
             $parsed = @($parsed[0].data)
+            while ($parsed.Count -eq 1 -and $null -ne $parsed[0] -and $parsed[0] -is [array]) {
+                $parsed = @($parsed[0])
+            }
         }
         $entries = @($parsed | Where-Object {
             $_ -and ($_.PSObject.Properties['Id'] -or $_.PSObject.Properties['id'] -or $_.PSObject.Properties['ID'])
@@ -682,7 +722,9 @@ function Get-LenovoProduct {
 
         if (-not $row.MachineType) {
             $row.Error = 'Could not work out the machine type for this serial'
+            return [pscustomobject]$row
         }
+        $row.Raw = ''
         return [pscustomobject]$row
     } finally {
         if ($ownClient) { $Client.Dispose() }
@@ -834,9 +876,7 @@ function ConvertFrom-LenovoPartsJson {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Text)
 
-    # Gathered into an array because PowerShell 7 unrolls a bare JSON array
-    # on the pipeline while 5.1 hands it back whole; this way both look alike.
-    $parsed = @($Text | ConvertFrom-Json)
+    $parsed = @(ConvertFrom-LenovoJsonList -Text $Text)
 
     $find = $null
     $find = {
@@ -978,6 +1018,7 @@ function Get-LenovoPartsList {
         Parts       = @()
         Source      = ''
         Error       = ''
+        Raw         = ''      # what Lenovo sent, kept when something goes wrong
     }
 
     $client = New-LenovoHttpClient -TimeoutSec $TimeoutSec
@@ -989,6 +1030,7 @@ function Get-LenovoPartsList {
         $out.ProductId   = $product.ProductId
         if ($product.Error) {
             $out.Error = $product.Error
+            $out.Raw   = $product.Raw
             return [pscustomobject]$out
         }
 
@@ -1002,15 +1044,24 @@ function Get-LenovoPartsList {
         $url = $script:PartsExportUrl + $query
         $accept = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json, text/csv, */*'
 
-        # The site's own button posts; a plain GET is the fallback.
-        $resp = $null
+        # The site's own button posts; a plain GET is the fallback. When both
+        # are refused, report the more telling answer: a 405 only says "not
+        # that verb", anything else says what Lenovo objected to.
+        $resp     = $null
+        $failures = @()
         foreach ($method in 'POST', 'GET') {
             $resp = Invoke-LenovoRequest -Client $client -Url $url -Method $method `
                                          -Accept $accept -Referer $script:PartsReferer
             if (-not $resp.Error -and $resp.Bytes.Length -gt 0) { break }
+            $failures += $resp
             if ($resp.Error -match 'Request failed') { break }
         }
+        if ($resp.Error -or $resp.Bytes.Length -eq 0) {
+            $telling = @($failures | Where-Object { $_.StatusCode -ne 405 })
+            if ($telling.Count -gt 0) { $resp = $telling[0] }
+        }
 
+        $out.Raw = Get-LenovoResponseSummary $resp
         if ($resp.Error) {
             $out.Error = $resp.Error
             return [pscustomobject]$out
@@ -1041,6 +1092,7 @@ function Get-LenovoPartsList {
 
         $out.Parts = @(ConvertTo-LenovoPartRows -Record $records)
         if ($out.Parts.Count -eq 0) { $out.Error = 'No parts listed for this serial' }
+        else { $out.Raw = '' }
     } catch {
         $out.Error = "Could not read the parts list: $($_.Exception.Message)"
     } finally {
@@ -1090,4 +1142,5 @@ Export-ModuleMember -Function Get-LenovoWarranty, ConvertTo-SerialList,
                               Get-LenovoProduct, Get-LenovoPartsList, Find-LenovoPart,
                               Get-LenovoPartCategory, Select-LenovoPart,
                               ConvertTo-LenovoPartRows, ConvertFrom-LenovoXlsx,
-                              ConvertFrom-LenovoDelimited, ConvertFrom-LenovoPartsJson
+                              ConvertFrom-LenovoDelimited, ConvertFrom-LenovoPartsJson,
+                              ConvertFrom-LenovoJsonList

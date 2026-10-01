@@ -222,6 +222,12 @@ Windows PowerShell 5.1 (built into Windows) and internet access to
 - Part matching is textual. It is tuned to the wording Lenovo uses in its
   parts lists, but a part with an unusual description can be missed or an
   odd one included — **All parts** is always there as the backstop.
+- When a part lookup fails, the product card in the GUI shows the start of
+  what Lenovo actually sent back, and `.\Lookup-Part.ps1 <serial> -Verbose`
+  prints it in full. A valid serial coming back "not found" with a reply of
+  `[]` means Lenovo's product resolver has no record of it; anything else
+  (an HTML page, a different JSON shape) points at the endpoint having
+  changed.
 - Serials are normalised to uppercase; blank lines, commas, tabs and stray
   quotes in pasted input are handled.
 - Duplicate serials are deliberately **kept**, so the output stays row-for-row
