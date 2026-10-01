@@ -200,22 +200,23 @@ resolves the serial to its product path, which carries the machine type and
 model (`.../21ah/21ah00bbus/pf0abcde`), and then
 
 ```
-POST https://pcsupport.lenovo.com/us/en/api/v4/upsellAggregation/parts/export
-     ?type=SERIAL&serialId=pf0abcde&model=21ah00bbus&mtId=21ah
+POST https://pcsupport.lenovo.com/us/en/api/v4/upsellAggregation/parts/asBuilt
+     {"serialId":"pf0abcde","mtId":"21ah","model":"21ah00bbus"}
 ```
 
-is the **Download parts list** link from Lenovo's own parts lookup page. It
-returns the serial's full FRU list as a spreadsheet, which the module reads
-straight out of the xlsx (it is only a zip of XML) — no Excel, no extra
-modules. Should the export ever come back as CSV or JSON instead, the same
-normaliser handles those too, matching columns by wording (`FRU`, `Part
-Number`, `Description`, `Commodity`, ...) rather than position.
+is the call the parts page itself makes when it shows "parts for your serial
+number" — found by scanning the scripts the page loads. "As built" is the
+parts list for that exact machine. If it declines, the same body goes to
+`parts/model` (every part for the model) and then `parts/compatible`, and the
+page's **Download parts list** export is the last resort.
 
-The export link was captured from a browser rather than documented, so the
-exact request it wants is not certain. The tool tries the plausible shapes in
-turn — POST with the query string, GET, POST with the same fields as a JSON
-body, and POST again after loading the product's parts page so any cookies it
-sets ride along — and takes the first that returns a parts list.
+The JSON reader does not assume a layout: it walks whatever comes back and
+keeps every object carrying a part number, so a bare list, a list under
+`data`, or parts grouped under commodities all read the same, with the group's
+commodity name carried onto each part. A spreadsheet export is read straight
+out of the xlsx (it is only a zip of XML) — no Excel, no extra modules — and
+CSV is handled too. Columns are matched by wording (`FRU`, `Part Number`,
+`Description`, `Commodity`, ...) rather than position.
 
 ## Requirements
 
@@ -228,11 +229,12 @@ Windows PowerShell 5.1 (built into Windows) and internet access to
   but if Lenovo changes it, `$script:ApiUrl` and `ConvertFrom-LenovoIbaseInfo`
   in `LenovoWarranty.psm1` are the two places to fix.
 - Part lookup rides two more of the same kind. The product resolver is widely
-  used and well understood; the parts export is the site's own download link,
-  captured from a browser session rather than documented. If it changes,
-  `$script:PartsExportUrl`, the query built in `Get-LenovoPartsList`, and the
-  column patterns in `ConvertTo-LenovoPartRows` are the places to look. The
-  preset patterns live in `$script:PartCategories` and are easy to extend.
+  used and well understood; the parts calls are what the site's own page
+  scripts make, read out of those scripts rather than documented. If they
+  change, `$script:PartsApiBase`, the attempt list in `Get-LenovoPartsList`,
+  and the column patterns in `ConvertTo-LenovoPartRows` are the places to
+  look, and the **Diagnose** report shows what the page calls now. The preset
+  patterns live in `$script:PartCategories` and are easy to extend.
 - Part matching is textual. It is tuned to the wording Lenovo uses in its
   parts lists, but a part with an unusual description can be missed or an
   odd one included — **All parts** is always there as the backstop.

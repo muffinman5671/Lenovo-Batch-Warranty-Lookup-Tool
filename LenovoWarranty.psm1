@@ -376,19 +376,25 @@ function Format-WarrantyDate {
 #         laptops-and-netbooks/thinkpad-t-series-laptops/thinkpad-t14-gen-3-
 #         type-21ah-21aj/21ah/21ah00bbus/pf0abcde
 #
-#    2. /us/en/api/v4/upsellAggregation/parts/export
-#         ?type=SERIAL&serialId=pf0abcde&model=21ah00bbus&mtId=21ah
-#       The "Download parts list" link on Lenovo's own parts lookup page.
-#       It hands back the full FRU list for that serial as a spreadsheet.
+#    2. POST /us/en/api/v4/upsellAggregation/parts/asBuilt
+#         {"serialId":"pf0abcde","mtId":"21ah","model":"21ah00bbus"}
+#       The call the parts page itself makes (found by scanning the page's
+#       scripts): the parts list for that serial as it was built. The same
+#       body also works against parts/model and parts/compatible, which are
+#       the fallbacks, and the page's "Download parts list" export is the
+#       last resort.
 #
-#  The spreadsheet is read straight out of the xlsx (it is just a zip of
-#  XML) so there is no Excel dependency. The normaliser also accepts CSV
-#  or JSON, so if Lenovo changes what the export returns the rest of the
-#  tool keeps working as long as there is still a part number column.
+#  The JSON reader walks whatever shape comes back and picks out every
+#  object that carries a part number, inheriting a commodity name from the
+#  group it sits under. A spreadsheet export is read straight out of the
+#  xlsx (it is just a zip of XML) so there is no Excel dependency, and CSV
+#  is handled too, so a change on Lenovo's side keeps working as long as
+#  there is still a part number column.
 # ==========================================================================
 
 $script:SiteBase       = 'https://pcsupport.lenovo.com'
 $script:ProductsUrl    = 'https://pcsupport.lenovo.com/us/en/api/v4/mse/getproducts'
+$script:PartsApiBase   = 'https://pcsupport.lenovo.com/us/en/api/v4/upsellAggregation/parts'
 $script:PartsExportUrl = 'https://pcsupport.lenovo.com/us/en/api/v4/upsellAggregation/parts/export'
 $script:PartsReferer   = 'https://pcsupport.lenovo.com/us/en/partslookup'
 
@@ -876,58 +882,101 @@ function ConvertFrom-LenovoDelimited {
 
 function ConvertFrom-LenovoPartsJson {
     <#
-        Finds the list of parts inside whatever JSON shape comes back - a bare
-        array, or an array under data/parts/items/results a few levels down.
+        Pulls part records out of whatever JSON shape comes back. Rather than
+        guess where the list lives, it walks the whole tree and keeps every
+        object that carries a part number: a bare array, an array under
+        data/parts, or parts grouped under commodities all come out the same.
+        A group's label (commodity, category, tier) is inherited by the parts
+        beneath it, and a nested list of substitute objects collapses to
+        their part numbers.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Text)
 
-    $parsed = @(ConvertFrom-LenovoJsonList -Text $Text)
+    $parsed  = @(ConvertFrom-LenovoJsonList -Text $Text)
+    $records = New-Object System.Collections.Generic.List[object]
 
-    $find = $null
-    $find = {
-        param($Node, [int] $Depth)
-        if ($null -eq $Node -or $Depth -gt 5) { return $null }
+    # What a part number property is called, and what its value looks like
+    # (Lenovo FRU and option numbers mix letters and digits: 01AV430,
+    # 5CB1H89763, 4X40E77322). A purely numeric id is not one.
+    $pnKey = '(?i)^(fru|pn|part_?no|part_?num|part_?number|fru_?part_?number|fru_?no|fru_?number|fru_?pn|part_?id)$|part_?number|fru_?part'
+    $pnVal = '^(?=.*[A-Za-z])(?=.*\d)[0-9A-Za-z-]{5,14}$'
+    $inheritKey = '(?i)commodity|categor|group|tier|section|class|family'
 
-        if ($Node -is [array]) {
-            $objs = @($Node | Where-Object { $_ -is [psobject] -and -not ($_ -is [string]) })
-            if ($objs.Count -gt 0) {
-                $names = @($objs[0].PSObject.Properties | ForEach-Object { $_.Name })
-                if (($names -join ' ') -match 'part|fru|\bp/?n\b') { return ,$objs }
-            }
-            foreach ($item in $Node) {
-                $hit = & $find $item ($Depth + 1)
-                if ($hit) { return $hit }
-            }
-            return $null
+    $isScalar = { param($v) ($v -is [string]) -or ($v -is [ValueType]) }
+
+    $isPart = {
+        param($o)
+        foreach ($p in $o.PSObject.Properties) {
+            if ($p.Name -match $pnKey -and $null -ne $p.Value -and
+                (& $isScalar $p.Value) -and ([string]$p.Value).Trim() -match $pnVal) { return $true }
         }
-
-        if ($Node -is [psobject]) {
-            # Likely wrappers first, then everything else.
-            $props = @($Node.PSObject.Properties)
-            $ordered = @($props | Where-Object { $_.Name -match '^(parts?|data|items?|results?|list|rows|records|content|body)$' }) +
-                       @($props | Where-Object { $_.Name -notmatch '^(parts?|data|items?|results?|list|rows|records|content|body)$' })
-            foreach ($p in $ordered) {
-                $hit = & $find $p.Value ($Depth + 1)
-                if ($hit) { return $hit }
-            }
-        }
-        return $null
+        return $false
     }
 
-    $list = & $find $parsed 0
-    if (-not $list) { return @() }
+    $labelOf = {
+        # One object standing in for a value: its part number, else its name.
+        param($o)
+        foreach ($p in $o.PSObject.Properties) {
+            if ($p.Name -match $pnKey -and $null -ne $p.Value -and (& $isScalar $p.Value) -and [string]$p.Value) { return ([string]$p.Value).Trim() }
+        }
+        foreach ($p in $o.PSObject.Properties) {
+            if ($p.Name -match '(?i)name|desc|title' -and $p.Value -is [string] -and $p.Value) { return $p.Value.Trim() }
+        }
+        return ''
+    }
 
-    $records = foreach ($o in $list) {
+    $flatten = {
+        param($o, [hashtable] $Inherited)
         $rec = [ordered]@{}
         foreach ($p in $o.PSObject.Properties) {
             $v = $p.Value
-            if ($v -is [array]) { $v = ($v | ForEach-Object { [string]$_ }) -join ', ' }
-            $rec[$p.Name] = [string]$v
+            if ($null -eq $v) { $rec[$p.Name] = ''; continue }
+            if (& $isScalar $v) { $rec[$p.Name] = [string]$v; continue }
+            if ($v -is [array]) {
+                $items = foreach ($i in $v) {
+                    if ($null -eq $i) { continue }
+                    if (& $isScalar $i) { [string]$i } elseif ($i -is [psobject]) { & $labelOf $i }
+                }
+                $rec[$p.Name] = (@($items | Where-Object { $_ }) -join ', ')
+                continue
+            }
+            if ($v -is [psobject]) { $rec[$p.Name] = & $labelOf $v }
         }
-        $rec
+        foreach ($k in $Inherited.Keys) {
+            if (-not $rec.Contains($k)) { $rec[$k] = $Inherited[$k] }
+        }
+        return $rec
     }
-    return @($records)
+
+    $walk = $null
+    $walk = {
+        param($Node, [hashtable] $Inherited, [int] $Depth)
+        if ($null -eq $Node -or $Depth -gt 10) { return }
+        if (& $isScalar $Node) { return }
+
+        if ($Node -is [array]) {
+            foreach ($item in $Node) { & $walk $item $Inherited ($Depth + 1) }
+            return
+        }
+        if ($Node -is [psobject]) {
+            if (& $isPart $Node) {
+                [void]$records.Add((& $flatten $Node $Inherited))
+                return                       # substitutes inside it are not more parts
+            }
+            # A grouping object: carry its label down, then look inside.
+            $inh = @{} + $Inherited
+            foreach ($p in $Node.PSObject.Properties) {
+                if ($p.Name -match $inheritKey -and $p.Value -is [string] -and $p.Value) { $inh[$p.Name] = $p.Value.Trim() }
+            }
+            foreach ($p in $Node.PSObject.Properties) {
+                if ($null -ne $p.Value -and -not (& $isScalar $p.Value)) { & $walk $p.Value $inh ($Depth + 1) }
+            }
+        }
+    }
+
+    & $walk $parsed @{} 0
+    return $records.ToArray()
 }
 
 
@@ -943,8 +992,16 @@ function ConvertTo-LenovoPartRows {
 
     if ($null -eq $Record -or $Record.Count -eq 0) { return @() }
 
-    $first = $Record[0]
-    $keys  = @(if ($first -is [System.Collections.IDictionary]) { $first.Keys } else { $first.PSObject.Properties | ForEach-Object { $_.Name } })
+    # Column names are the union over every record, in first-seen order:
+    # parts pulled out of grouped JSON do not all carry the same keys.
+    $keys = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    foreach ($rec in $Record) {
+        $names = if ($rec -is [System.Collections.IDictionary]) { @($rec.Keys) } else { @($rec.PSObject.Properties | ForEach-Object { $_.Name }) }
+        foreach ($n in $names) {
+            if (-not $seen.ContainsKey([string]$n)) { $seen[[string]$n] = $true; [void]$keys.Add([string]$n) }
+        }
+    }
 
     $pick = {
         param([string[]] $Patterns)
@@ -959,10 +1016,10 @@ function ConvertTo-LenovoPartRows {
     $map = @{
         PartNumber  = & $pick @('^\s*fru\s*(part)?\s*(number|no\.?|#|p/?n)?\s*$', 'part\s*(number|no\b|no\.|#|num)', '^\s*p/?n\s*$', 'fru', 'partnumber|partno|partnum', '^\s*part\s*$', '^\s*number\s*$')
         Description = & $pick @('desc', 'part\s*name', '^\s*name\s*$', 'title')
-        Commodity   = & $pick @('commodity', 'categor', 'part\s*type', '^\s*type\s*$', 'group', 'class')
+        Commodity   = & $pick @('commodity', 'categor', 'part\s*type', '^\s*type\s*$', 'group', 'class', 'family')
         Substitutes = & $pick @('subst', 'replac', 'alternat', 'supersed')
-        Status      = & $pick @('status', 'availab', 'stock', 'orderable')
-        Cru         = & $pick @('\bcru\b')
+        Status      = & $pick @('^\s*status\s*$', 'availab', 'status', 'stock', 'orderable')
+        Cru         = & $pick @('^\s*cru', 'cru\s*(tier|type|level)', '\bcru\b')
         Price       = & $pick @('price', 'cost')
     }
     if (-not $map.PartNumber) { throw "No part number column in: $($keys -join ', ')" }
@@ -970,7 +1027,8 @@ function ConvertTo-LenovoPartRows {
     $get = {
         param($Rec, [string] $Key)
         if (-not $Key) { return '' }
-        $v = if ($Rec -is [System.Collections.IDictionary]) { $Rec[$Key] } else { $Rec.$Key }
+        $v = if ($Rec -is [System.Collections.IDictionary]) { $Rec[$Key] }
+             elseif ($Rec.PSObject.Properties[$Key]) { $Rec.$Key } else { $null }
         if ($null -eq $v) { return '' }
         return ([string]$v).Trim()
     }
@@ -1018,6 +1076,22 @@ function Read-LenovoPartsPayload {
             if ($text -match '^[\[{]') {
                 $out.Source  = 'json'
                 $out.Records = @(ConvertFrom-LenovoPartsJson -Text $text)
+                if ($out.Records.Count -eq 0) {
+                    # A well-formed refusal: {"code":103,"msg":{"desc":"..."}}
+                    $top = @(ConvertFrom-LenovoJsonList -Text $text)
+                    if ($top.Count -eq 1 -and $top[0] -is [psobject] -and $top[0].PSObject.Properties['code'] -and
+                        [string]$top[0].code -ne '0') {
+                        $desc = ''
+                        if ($top[0].PSObject.Properties['msg'] -and $top[0].msg) {
+                            $desc = if ($top[0].msg -is [string]) { $top[0].msg }
+                                    elseif ($top[0].msg.PSObject.Properties['desc']) { [string]$top[0].msg.desc } else { '' }
+                        }
+                        if (-not $desc -and $top[0].PSObject.Properties['message']) { $desc = [string]$top[0].message }
+                        if (-not $desc) { $desc = "code $($top[0].code)" }
+                        $out.Reason = "Lenovo said: $($desc.Trim())"
+                        return [pscustomobject]$out
+                    }
+                }
             } elseif ($text -match '^<') {
                 $out.Reason = 'a web page, not a parts list'
                 return [pscustomobject]$out
@@ -1100,23 +1174,21 @@ function Get-LenovoPartsList {
         }
         $query = '?fileName=' + [Uri]::EscapeDataString($fileName) + '&' +
                  (($fields.Keys | ForEach-Object { "$_=" + [Uri]::EscapeDataString($fields[$_]) }) -join '&')
-        $jsonBody = '{"fileName":"' + $fileName + '","type":"SERIAL","serialId":"' + $fields.serialId +
-                    '","model":"' + $fields.model + '","mtId":"' + $fields.mtId +
-                    '","supportSales":true,"viewInStock":false}'
-
-        $accept   = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json, text/csv, */*'
+        $accept   = 'application/json, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, text/csv, */*'
         $pageUrl  = "$($script:SiteBase)/us/en/products/$($product.ProductId)/parts"
         $xhr      = @{ 'X-Requested-With' = 'XMLHttpRequest'; 'Origin' = $script:SiteBase }
 
-        # The export is the site's own "Download parts list" link, captured
-        # from a browser rather than documented, so the exact shape of the
-        # request it wants is not certain. These are tried in turn until one
-        # hands back a parts list; what each one answered is kept in Raw.
+        # The body the parts page itself posts (seen in its scripts), sent to
+        # the page's own endpoints in turn: as-built is the list for this very
+        # serial, model and compatible are broader fallbacks, and the page's
+        # "Download parts list" export is the last resort. What each one
+        # answered is kept in Raw.
+        $apiBody  = '{"serialId":"' + $fields.serialId + '","mtId":"' + $fields.mtId + '","model":"' + $fields.model + '"}'
         $attempts = @(
-            @{ Name = 'POST export with query string';      Method = 'POST'; Url = $script:PartsExportUrl + $query; Body = '' }
-            @{ Name = 'GET export with query string';       Method = 'GET';  Url = $script:PartsExportUrl + $query }
-            @{ Name = 'POST export with JSON body';         Method = 'POST'; Url = $script:PartsExportUrl;          Body = $jsonBody }
-            @{ Name = 'POST export after loading the page'; Method = 'POST'; Url = $script:PartsExportUrl + $query; Body = ''; WarmUp = $pageUrl }
+            @{ Name = 'POST parts/asBuilt';                 Method = 'POST'; Url = "$($script:PartsApiBase)/asBuilt";    Body = $apiBody }
+            @{ Name = 'POST parts/model';                   Method = 'POST'; Url = "$($script:PartsApiBase)/model";      Body = $apiBody }
+            @{ Name = 'POST parts/compatible';              Method = 'POST'; Url = "$($script:PartsApiBase)/compatible"; Body = $apiBody }
+            @{ Name = 'POST parts/export with query string'; Method = 'POST'; Url = $script:PartsExportUrl + $query;      Body = '' }
         )
 
         $log     = New-Object System.Collections.Generic.List[string]
@@ -1126,11 +1198,6 @@ function Get-LenovoPartsList {
             $n++
             # Indexer access: a missing optional key reads as $null, where dot
             # notation would throw under strict mode.
-            if ($a['WarmUp']) {
-                # Cookies the page sets ride along in the client for the retry.
-                $warm = Invoke-LenovoRequest -Client $client -Url $a['WarmUp'] -Accept 'text/html, */*'
-                [void]$log.Add("$n. GET parts page -> HTTP $($warm.StatusCode) $($warm.ContentType) $($warm.Bytes.Length) bytes")
-            }
             $resp = Invoke-LenovoRequest -Client $client -Url $a['Url'] -Method $a['Method'] -Accept $accept `
                                          -Referer $pageUrl -Headers $xhr -Body ([string]$a['Body'])
             if ($resp.Error -and $resp.StatusCode -eq 0) {
@@ -1156,6 +1223,7 @@ function Get-LenovoPartsList {
             # is the one worth repeating; the rest are in Raw.
             $first = [string]$log[0]
             if ($first -match 'not a parts list: (.+)$')     { $out.Error = "Lenovo refused the parts list: $($Matches[1])" }
+            elseif ($first -match 'Lenovo said: (.+)$')      { $out.Error = "Lenovo said: $($Matches[1])" }
             elseif ($first -match 'a web page')              { $out.Error = 'Lenovo returned a web page instead of a parts list' }
             elseif ($first -match '-> (Request failed.*)$')  { $out.Error = $Matches[1] }
             elseif ($first -match '-> HTTP (\d+)')           { $out.Error = "Lenovo did not return a parts list (HTTP $($Matches[1]))" }
@@ -1210,6 +1278,12 @@ function Find-LenovoPartsEndpoint {
         foreach ($hit in $paths) { [void]$lines.Add("  [$Label] api path: $hit") }
         $ctx = @([regex]::Matches($Text, '.{0,120}upsellAggregation.{0,200}') | ForEach-Object { $_.Value } | Select-Object -First 25)
         foreach ($c in $ctx) { [void]$lines.Add("  [$Label] upsellAggregation context: " + (($c -replace '\s+', ' ').Trim())) }
+        # The calls the tool relies on, with enough around them to read the
+        # whole request body and anything the export wants (cruTiers).
+        foreach ($kw in 'parts/asBuilt', 'parts/model"', 'parts/compatible', 'parts/export', 'cruTiers') {
+            $near = @([regex]::Matches($Text, '.{0,300}' + [regex]::Escape($kw) + '.{0,600}') | ForEach-Object { $_.Value } | Select-Object -First 4)
+            foreach ($c in $near) { [void]$lines.Add("  [$Label] near $kw`: " + (($c -replace '\s+', ' ').Trim())) }
+        }
     }
 
     try {
