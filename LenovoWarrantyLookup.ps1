@@ -604,11 +604,18 @@ function Update-InputCount {
 }
 
 function Set-Status {
-    <#  Writes to the warranty bar unless told which status label to use. #>
+    <#
+        Writes to the warranty bar unless told which status label to use.
+        Long messages are cut, and the label is kept flush with the right
+        edge so a longer one grows leftwards rather than off the window.
+    #>
     param([string]$Text, [System.Drawing.Color]$Color = $navy, $Target = $status)
-    $Target.Text      = $Text.ToUpperInvariant()
+    $t = $Text.ToUpperInvariant()
+    if ($t.Length -gt 44) { $t = $t.Substring(0, 43) + '~' }
+    $Target.Text      = $t
     $Target.ForeColor = $Color
     $Target.Visible   = $true
+    $Target.Left      = $Target.Parent.ClientSize.Width - $Target.PreferredSize.Width
 }
 
 function Set-Progress {
@@ -784,10 +791,12 @@ function Update-PartInfo {
         $text = "$($r.Serial)`r`n`r`n$($r.Error.ToUpperInvariant())"
         if ($r.PSObject.Properties['Raw'] -and $r.Raw) {
             # What Lenovo actually sent, so a wrong guess about the endpoint
-            # is visible in the window rather than silent.
-            $raw = $r.Raw
+            # is visible in the window rather than silent. The command line's
+            # -Diagnose switch has the full story.
+            $raw = ([string]$r.Raw -split "`n")[0] -replace '^\d+\. ', ''
             if ($raw.Length -gt 150) { $raw = $raw.Substring(0, 150) + '...' }
             $text += "`r`n`r`nLENOVO SAID: $raw"
+            $text += "`r`n`r`nRUN LOOKUP-PART.PS1 <SERIAL> -DIAGNOSE FOR DETAILS"
         }
         $lblPInfo.Text = $text
         return

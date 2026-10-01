@@ -203,6 +203,12 @@ modules. Should the export ever come back as CSV or JSON instead, the same
 normaliser handles those too, matching columns by wording (`FRU`, `Part
 Number`, `Description`, `Commodity`, ...) rather than position.
 
+The export link was captured from a browser rather than documented, so the
+exact request it wants is not certain. The tool tries the plausible shapes in
+turn — POST with the query string, GET, POST with the same fields as a JSON
+body, and POST again after loading the product's parts page so any cookies it
+sets ride along — and takes the first that returns a parts list.
+
 ## Requirements
 
 Windows PowerShell 5.1 (built into Windows) and internet access to
@@ -222,12 +228,15 @@ Windows PowerShell 5.1 (built into Windows) and internet access to
 - Part matching is textual. It is tuned to the wording Lenovo uses in its
   parts lists, but a part with an unusual description can be missed or an
   odd one included — **All parts** is always there as the backstop.
-- When a part lookup fails, the product card in the GUI shows the start of
-  what Lenovo actually sent back, and `.\Lookup-Part.ps1 <serial> -Verbose`
-  prints it in full. A valid serial coming back "not found" with a reply of
-  `[]` means Lenovo's product resolver has no record of it; anything else
-  (an HTML page, a different JSON shape) points at the endpoint having
-  changed.
+- When a part lookup fails, the product card in the GUI shows what Lenovo
+  answered the first attempt, and `.\Lookup-Part.ps1 <serial> -Diagnose`
+  prints what every attempt got back, then scans the product's parts page
+  and the scripts it loads for the parts API the site itself calls. The
+  report is also saved next to the script as `Lenovo parts diagnostics
+  <date>.txt`. A valid serial coming back "not found" with a reply of `[]`
+  means Lenovo's product resolver has no record of it; "Lenovo refused the
+  parts list" means the export wants something the tool is not sending, and
+  the scan is what shows what that is.
 - Serials are normalised to uppercase; blank lines, commas, tabs and stray
   quotes in pasted input are handled.
 - Duplicate serials are deliberately **kept**, so the output stays row-for-row

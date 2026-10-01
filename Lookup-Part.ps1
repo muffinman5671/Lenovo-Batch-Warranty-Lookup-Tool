@@ -25,6 +25,12 @@
 .PARAMETER CsvPath
     Also write the matching rows to this CSV file.
 
+.PARAMETER Diagnose
+    When a lookup fails: print what Lenovo answered to every attempt, then
+    scan the product's parts page and its scripts for the parts API the site
+    itself calls. The same report is saved next to this script as
+    "Lenovo parts diagnostics <date>.txt", ready to paste into a bug report.
+
 .EXAMPLE
     .\Lookup-Part.ps1 PF0ABCDE 'System board'
 
@@ -36,6 +42,9 @@
 
 .EXAMPLE
     .\Lookup-Part.ps1 -ListParts
+
+.EXAMPLE
+    .\Lookup-Part.ps1 PF0ABCDE -Diagnose
 #>
 [CmdletBinding(DefaultParameterSetName = 'Lookup')]
 param(
@@ -52,7 +61,10 @@ param(
     [switch] $PartNumbersOnly,
 
     [Parameter(ParameterSetName = 'Lookup')]
-    [string] $CsvPath
+    [string] $CsvPath,
+
+    [Parameter(ParameterSetName = 'Lookup')]
+    [switch] $Diagnose
 )
 
 Set-StrictMode -Version Latest
@@ -72,11 +84,31 @@ if ($serial.Count -ne 1) { throw 'Give exactly one serial number.' }
 Write-Verbose "Looking up '$Part' for $($serial[0])."
 $result = Find-LenovoPart -SerialNumber $serial[0] -Part $Part
 
+if ($Diagnose) {
+    $report = New-Object System.Collections.Generic.List[string]
+    [void]$report.Add("Lenovo part lookup diagnostics - $(Get-Date -Format 'yyyy-MM-dd HH:mm') - PowerShell $($PSVersionTable.PSVersion)")
+    [void]$report.Add("Serial: $($result.Serial)")
+    if ($result.Error) { [void]$report.Add("Result: $($result.Error)") }
+    else { [void]$report.Add("Result: OK - $($result.Parts.Count) parts via $($result.Source) for $($result.Product)") }
+    if ($result.Raw) {
+        [void]$report.Add('What each attempt got back:')
+        foreach ($l in ($result.Raw -split "`n")) { [void]$report.Add("  $l") }
+    }
+    [void]$report.Add('Scan of the parts page and its scripts:')
+    foreach ($l in (Find-LenovoPartsEndpoint -SerialNumber $result.Serial)) { [void]$report.Add("  $l") }
+
+    $reportPath = Join-Path $PSScriptRoot "Lenovo parts diagnostics $(Get-Date -Format 'yyyy-MM-dd').txt"
+    $report | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    $report | ForEach-Object { Write-Host $_ }
+    Write-Host "Saved to $reportPath" -ForegroundColor Green
+    if ($result.Error) { return }
+}
+
 if ($result.Error) {
     # -Verbose shows what Lenovo actually sent back, which is what you need
     # when a serial you know is good comes back "not found".
-    if ($result.Raw) { Write-Verbose "Lenovo replied: $($result.Raw)" }
-    throw "$($serial[0]): $($result.Error) (run with -Verbose to see Lenovo's reply)"
+    if ($result.Raw) { foreach ($l in ($result.Raw -split "`n")) { Write-Verbose "Lenovo replied: $l" } }
+    throw "$($serial[0]): $($result.Error) (run with -Diagnose to see what Lenovo answered)"
 }
 
 Write-Verbose ("{0} - type {1}, model {2}: {3} parts listed, {4} matching" -f

@@ -387,6 +387,7 @@ function Format-WarrantyDate {
 #  tool keeps working as long as there is still a part number column.
 # ==========================================================================
 
+$script:SiteBase       = 'https://pcsupport.lenovo.com'
 $script:ProductsUrl    = 'https://pcsupport.lenovo.com/us/en/api/v4/mse/getproducts'
 $script:PartsExportUrl = 'https://pcsupport.lenovo.com/us/en/api/v4/upsellAggregation/parts/export'
 $script:PartsReferer   = 'https://pcsupport.lenovo.com/us/en/partslookup'
@@ -563,13 +564,15 @@ function Invoke-LenovoRequest {
         [ValidateSet('GET', 'POST')] [string] $Method = 'GET',
         [string] $Accept = 'application/json, text/plain, */*',
         [string] $Referer,
-        [string] $Body
+        [string] $Body,
+        [string] $ContentType = 'application/json',
+        [hashtable] $Headers
     )
 
     $out = [ordered]@{
         StatusCode  = 0
         ContentType = ''
-        Bytes       = $null
+        Bytes       = New-Object 'byte[]' 0     # never null, so .Length is always safe
         Text        = ''
         Error       = ''
     }
@@ -579,10 +582,13 @@ function Invoke-LenovoRequest {
                     [System.Net.Http.HttpMethod]::$Method, $Url)
         [void]$req.Headers.TryAddWithoutValidation('Accept', $Accept)
         if ($Referer) { $req.Headers.Referrer = [Uri]$Referer }
+        if ($Headers) {
+            foreach ($k in $Headers.Keys) { [void]$req.Headers.TryAddWithoutValidation($k, [string]$Headers[$k]) }
+        }
         if ($Method -eq 'POST') {
             $payload = if ($null -ne $Body) { $Body } else { '' }
             $req.Content = New-Object System.Net.Http.StringContent(
-                               $payload, [Text.Encoding]::UTF8, 'application/json')
+                               $payload, [Text.Encoding]::UTF8, $ContentType)
         }
 
         $resp = $Client.SendAsync($req).GetAwaiter().GetResult()
@@ -987,6 +993,54 @@ function ConvertTo-LenovoPartRows {
 }
 
 
+function Read-LenovoPartsPayload {
+    <#
+        Works out what kind of thing came back - spreadsheet, JSON, CSV, a web
+        page, or a one line brush-off - and reads the part records out of it.
+        Reason is set, and Records left empty, when it is not a parts list.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Response)
+
+    $out = [ordered]@{ Source = ''; Records = @(); Reason = '' }
+    $b = $Response.Bytes
+    if ($null -eq $b -or $b.Length -eq 0) {
+        $out.Reason = 'empty reply'
+        return [pscustomobject]$out
+    }
+
+    try {
+        if ($b.Length -ge 2 -and $b[0] -eq 0x50 -and $b[1] -eq 0x4B) {
+            $out.Source  = 'xlsx'
+            $out.Records = @(ConvertFrom-LenovoXlsx -Bytes $b)
+        } else {
+            $text = $Response.Text.TrimStart([char]0xFEFF, ' ', "`t", "`r", "`n")
+            if ($text -match '^[\[{]') {
+                $out.Source  = 'json'
+                $out.Records = @(ConvertFrom-LenovoPartsJson -Text $text)
+            } elseif ($text -match '^<') {
+                $out.Reason = 'a web page, not a parts list'
+                return [pscustomobject]$out
+            } elseif ($text -notmatch $script:PartsHeaderPattern) {
+                $short = ($text -replace '\s+', ' ').Trim()
+                if ($short.Length -gt 80) { $short = $short.Substring(0, 80) + '...' }
+                $out.Reason = "not a parts list: $short"
+                return [pscustomobject]$out
+            } else {
+                $out.Source  = 'csv'
+                $out.Records = @(ConvertFrom-LenovoDelimited -Text $text)
+            }
+        }
+    } catch {
+        $out.Reason = "could not read it: $($_.Exception.Message)"
+        return [pscustomobject]$out
+    }
+
+    if ($out.Records.Count -eq 0) { $out.Reason = "no part rows in the $($out.Source)" }
+    return [pscustomobject]$out
+}
+
+
 function Get-LenovoPartsList {
     <#
     .SYNOPSIS
@@ -1034,63 +1088,83 @@ function Get-LenovoPartsList {
             return [pscustomobject]$out
         }
 
-        $stamp = Get-Date -Format 'yyyy-MM-dd-HH-mm-ss'
-        $query = '?fileName=' + [Uri]::EscapeDataString("PartsExport_Serial-$($serial.ToLowerInvariant())_$stamp.xlsx") +
-                 '&type=SERIAL' +
-                 '&serialId=' + [Uri]::EscapeDataString($serial.ToLowerInvariant()) +
-                 '&model='    + [Uri]::EscapeDataString($product.Model.ToLowerInvariant()) +
-                 '&mtId='     + [Uri]::EscapeDataString($product.MachineType.ToLowerInvariant()) +
-                 '&supportSales=true&viewInStock=false'
-        $url = $script:PartsExportUrl + $query
-        $accept = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json, text/csv, */*'
+        $stamp    = Get-Date -Format 'yyyy-MM-dd-HH-mm-ss'
+        $fileName = "PartsExport_Serial-$($serial.ToLowerInvariant())_$stamp.xlsx"
+        $fields   = [ordered]@{
+            type         = 'SERIAL'
+            serialId     = $serial.ToLowerInvariant()
+            model        = $product.Model.ToLowerInvariant()
+            mtId         = $product.MachineType.ToLowerInvariant()
+            supportSales = 'true'
+            viewInStock  = 'false'
+        }
+        $query = '?fileName=' + [Uri]::EscapeDataString($fileName) + '&' +
+                 (($fields.Keys | ForEach-Object { "$_=" + [Uri]::EscapeDataString($fields[$_]) }) -join '&')
+        $jsonBody = '{"fileName":"' + $fileName + '","type":"SERIAL","serialId":"' + $fields.serialId +
+                    '","model":"' + $fields.model + '","mtId":"' + $fields.mtId +
+                    '","supportSales":true,"viewInStock":false}'
 
-        # The site's own button posts; a plain GET is the fallback. When both
-        # are refused, report the more telling answer: a 405 only says "not
-        # that verb", anything else says what Lenovo objected to.
-        $resp     = $null
-        $failures = @()
-        foreach ($method in 'POST', 'GET') {
-            $resp = Invoke-LenovoRequest -Client $client -Url $url -Method $method `
-                                         -Accept $accept -Referer $script:PartsReferer
-            if (-not $resp.Error -and $resp.Bytes.Length -gt 0) { break }
-            $failures += $resp
-            if ($resp.Error -match 'Request failed') { break }
-        }
-        if ($resp.Error -or $resp.Bytes.Length -eq 0) {
-            $telling = @($failures | Where-Object { $_.StatusCode -ne 405 })
-            if ($telling.Count -gt 0) { $resp = $telling[0] }
-        }
+        $accept   = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json, text/csv, */*'
+        $pageUrl  = "$($script:SiteBase)/us/en/products/$($product.ProductId)/parts"
+        $xhr      = @{ 'X-Requested-With' = 'XMLHttpRequest'; 'Origin' = $script:SiteBase }
 
-        $out.Raw = Get-LenovoResponseSummary $resp
-        if ($resp.Error) {
-            $out.Error = $resp.Error
-            return [pscustomobject]$out
-        }
-        if ($resp.Bytes.Length -eq 0) {
-            $out.Error = 'Empty parts list from Lenovo'
-            return [pscustomobject]$out
-        }
+        # The export is the site's own "Download parts list" link, captured
+        # from a browser rather than documented, so the exact shape of the
+        # request it wants is not certain. These are tried in turn until one
+        # hands back a parts list; what each one answered is kept in Raw.
+        $attempts = @(
+            @{ Name = 'POST export with query string';      Method = 'POST'; Url = $script:PartsExportUrl + $query; Body = '' }
+            @{ Name = 'GET export with query string';       Method = 'GET';  Url = $script:PartsExportUrl + $query }
+            @{ Name = 'POST export with JSON body';         Method = 'POST'; Url = $script:PartsExportUrl;          Body = $jsonBody }
+            @{ Name = 'POST export after loading the page'; Method = 'POST'; Url = $script:PartsExportUrl + $query; Body = ''; WarmUp = $pageUrl }
+        )
 
-        $records = @()
-        $b = $resp.Bytes
-        if ($b.Length -ge 2 -and $b[0] -eq 0x50 -and $b[1] -eq 0x4B) {
-            $out.Source = 'xlsx'
-            $records = ConvertFrom-LenovoXlsx -Bytes $b
-        } else {
-            $text = $resp.Text.TrimStart([char]0xFEFF, ' ', "`t", "`r", "`n")
-            if ($text -match '^[\[{]') {
-                $out.Source = 'json'
-                $records = ConvertFrom-LenovoPartsJson -Text $text
-            } elseif ($text -match '^<') {
-                $out.Error = 'Lenovo returned a web page instead of a parts list'
-                return [pscustomobject]$out
-            } else {
-                $out.Source = 'csv'
-                $records = ConvertFrom-LenovoDelimited -Text $text
+        $log     = New-Object System.Collections.Generic.List[string]
+        $payload = $null
+        $n = 0
+        foreach ($a in $attempts) {
+            $n++
+            # Indexer access: a missing optional key reads as $null, where dot
+            # notation would throw under strict mode.
+            if ($a['WarmUp']) {
+                # Cookies the page sets ride along in the client for the retry.
+                $warm = Invoke-LenovoRequest -Client $client -Url $a['WarmUp'] -Accept 'text/html, */*'
+                [void]$log.Add("$n. GET parts page -> HTTP $($warm.StatusCode) $($warm.ContentType) $($warm.Bytes.Length) bytes")
             }
+            $resp = Invoke-LenovoRequest -Client $client -Url $a['Url'] -Method $a['Method'] -Accept $accept `
+                                         -Referer $pageUrl -Headers $xhr -Body ([string]$a['Body'])
+            if ($resp.Error -and $resp.StatusCode -eq 0) {
+                [void]$log.Add("$n. $($a['Name']) -> $($resp.Error)")
+                break                                   # no network; nothing else will work either
+            }
+            if ($resp.Error) {
+                [void]$log.Add("$n. $($a['Name']) -> " + (Get-LenovoResponseSummary $resp))
+                continue
+            }
+            $read = Read-LenovoPartsPayload -Response $resp
+            if ($read.Records.Count -gt 0) {
+                [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($read.Source), $($read.Records.Count) records")
+                $payload = $read
+                break
+            }
+            [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($resp.ContentType): $($read.Reason)")
+        }
+        $out.Raw = ($log -join "`n")
+
+        if (-not $payload) {
+            # The first attempt is the site's own request shape, so its answer
+            # is the one worth repeating; the rest are in Raw.
+            $first = [string]$log[0]
+            if ($first -match 'not a parts list: (.+)$')     { $out.Error = "Lenovo refused the parts list: $($Matches[1])" }
+            elseif ($first -match 'a web page')              { $out.Error = 'Lenovo returned a web page instead of a parts list' }
+            elseif ($first -match '-> (Request failed.*)$')  { $out.Error = $Matches[1] }
+            elseif ($first -match '-> HTTP (\d+)')           { $out.Error = "Lenovo did not return a parts list (HTTP $($Matches[1]))" }
+            else                                             { $out.Error = 'Lenovo did not return a parts list' }
+            return [pscustomobject]$out
         }
 
-        $out.Parts = @(ConvertTo-LenovoPartRows -Record $records)
+        $out.Source = $payload.Source
+        $out.Parts  = @(ConvertTo-LenovoPartRows -Record $payload.Records)
         if ($out.Parts.Count -eq 0) { $out.Error = 'No parts listed for this serial' }
         else { $out.Raw = '' }
     } catch {
@@ -1100,6 +1174,94 @@ function Get-LenovoPartsList {
     }
 
     return [pscustomobject]$out
+}
+
+
+function Find-LenovoPartsEndpoint {
+    <#
+    .SYNOPSIS
+        Diagnostic: scans a product's parts page and its scripts for the parts
+        API the site itself calls.
+
+    .DESCRIPTION
+        Resolves the serial, fetches the product's parts page, then every
+        script it loads from lenovo.com, and lists each api/v4 path mentioning
+        parts, every mention of upsellAggregation with its surroundings, and
+        whether the page HTML itself carries part numbers. Returns lines of
+        text meant to be pasted into a bug report.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)] [string] $SerialNumber,
+        [int] $TimeoutSec = 90,
+        [int] $MaxScripts = 30
+    )
+
+    $lines  = New-Object System.Collections.Generic.List[string]
+    $client = New-LenovoHttpClient -TimeoutSec $TimeoutSec
+
+    $addHits = {
+        param([string] $Text, [string] $Label)
+        if (-not $Text) { return }
+        # The query string is kept when the code spells one out, because the
+        # parameter names are half of what needs knowing.
+        $paths = @([regex]::Matches($Text, '(?i)/?api/v\d+/[A-Za-z0-9_./${}-]*part[A-Za-z0-9_./${}?&=-]*') |
+                   ForEach-Object { $_.Value } | Sort-Object -Unique)
+        foreach ($hit in $paths) { [void]$lines.Add("  [$Label] api path: $hit") }
+        $ctx = @([regex]::Matches($Text, '.{0,120}upsellAggregation.{0,200}') | ForEach-Object { $_.Value } | Select-Object -First 25)
+        foreach ($c in $ctx) { [void]$lines.Add("  [$Label] upsellAggregation context: " + (($c -replace '\s+', ' ').Trim())) }
+    }
+
+    try {
+        $product = Get-LenovoProduct -SerialNumber $SerialNumber -Client $client
+        if ($product.Error) {
+            [void]$lines.Add("Product: $($product.Error) | $($product.Raw)")
+            return $lines.ToArray()
+        }
+        [void]$lines.Add("Product: $($product.Product) | type $($product.MachineType) | model $($product.Model) | id $($product.ProductId)")
+
+        $pageUrl = "$($script:SiteBase)/us/en/products/$($product.ProductId)/parts"
+        $page    = Invoke-LenovoRequest -Client $client -Url $pageUrl -Accept 'text/html, */*'
+        [void]$lines.Add("Parts page: $pageUrl -> HTTP $($page.StatusCode) $($page.ContentType), $($page.Bytes.Length) bytes $($page.Error)")
+        if (-not $page.Text) { return $lines.ToArray() }
+
+        # FRU numbers are 7 or 10 characters, start with a digit, mix in letters:
+        # 01AV430, 45N0346, 5CB1H89763, 5M10Z39781.
+        $frus = @([regex]::Matches($page.Text, '\b\d(?:[A-Z0-9]{6}|[A-Z0-9]{9})\b') |
+                  ForEach-Object { $_.Value } | Where-Object { $_ -match '[A-Z]' } | Sort-Object -Unique)
+        $eg   = if ($frus.Count -gt 0) { ' e.g. ' + (($frus | Select-Object -First 6) -join ', ') } else { '' }
+        [void]$lines.Add("Part-number-looking tokens in the page HTML: $($frus.Count)$eg")
+        & $addHits $page.Text 'page'
+
+        $srcs = @([regex]::Matches($page.Text, '(?i)<script[^>]+src\s*=\s*["'']([^"'']+)["'']') |
+                  ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        $base = [Uri]$pageUrl
+        $urls = @()
+        foreach ($src in $srcs) {
+            $u = $null
+            # Only the site's own scripts and Lenovo's CDNs; third party tags
+            # (analytics, chat widgets) cannot know the parts API.
+            if ([Uri]::TryCreate($base, $src, [ref]$u) -and
+                ($u.Host -eq $base.Host -or $u.Host -match 'lenovo\.com$')) { $urls += $u.AbsoluteUri }
+        }
+        $urls = @($urls | Sort-Object -Unique | Select-Object -First $MaxScripts)
+        [void]$lines.Add("Scripts on the page: $($srcs.Count), scanning $($urls.Count) from the site or lenovo.com")
+
+        foreach ($u in $urls) {
+            $js = Invoke-LenovoRequest -Client $client -Url $u -Accept '*/*'
+            $name = ($u -split '/')[-1]
+            if ($name.Length -gt 60) { $name = $name.Substring(0, 60) }
+            $before = $lines.Count
+            if ($js.Text) { & $addHits $js.Text $name }
+            [void]$lines.Add("  script $name -> HTTP $($js.StatusCode), $($js.Bytes.Length) bytes, $($lines.Count - $before) hits")
+        }
+    } catch {
+        [void]$lines.Add("Scan failed: $($_.Exception.Message)")
+    } finally {
+        $client.Dispose()
+    }
+
+    return $lines.ToArray()
 }
 
 
@@ -1143,4 +1305,5 @@ Export-ModuleMember -Function Get-LenovoWarranty, ConvertTo-SerialList,
                               Get-LenovoPartCategory, Select-LenovoPart,
                               ConvertTo-LenovoPartRows, ConvertFrom-LenovoXlsx,
                               ConvertFrom-LenovoDelimited, ConvertFrom-LenovoPartsJson,
-                              ConvertFrom-LenovoJsonList
+                              ConvertFrom-LenovoJsonList, Read-LenovoPartsPayload,
+                              Find-LenovoPartsEndpoint
