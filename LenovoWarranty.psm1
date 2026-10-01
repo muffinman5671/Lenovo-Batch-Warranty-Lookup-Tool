@@ -899,7 +899,7 @@ function ConvertFrom-LenovoPartsJson {
     # What a part number property is called, and what its value looks like
     # (Lenovo FRU and option numbers mix letters and digits: 01AV430,
     # 5CB1H89763, 4X40E77322). A purely numeric id is not one.
-    $pnKey = '(?i)^(fru|pn|part_?no|part_?num|part_?number|fru_?part_?number|fru_?no|fru_?number|fru_?pn|part_?id)$|part_?number|fru_?part'
+    $pnKey = '(?i)fru|^pn$|pn$|^pn[_-]?|part_?(no|num|number|id|code)|material_?(no|num|number)|^sku$'
     $pnVal = '^(?=.*[A-Za-z])(?=.*\d)[0-9A-Za-z-]{5,14}$'
     $inheritKey = '(?i)commodity|categor|group|tier|section|class|family'
 
@@ -1051,6 +1051,97 @@ function ConvertTo-LenovoPartRows {
 }
 
 
+function Get-LenovoJsonShape {
+    <#
+        A compact sketch of a JSON document - keys, nesting, array sizes and
+        a sample of each value - for the diagnostics. Enough to see where a
+        list lives and what its fields are called without dumping it all.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $Text, [int] $MaxLength = 900)
+
+    $sketch = $null
+    $sketch = {
+        param($Node, [int] $Depth)
+        if ($null -eq $Node) { return 'null' }
+        if ($Node -is [string]) {
+            $t = $Node
+            if ($t.Length -gt 36) { $t = $t.Substring(0, 36) + '...' }
+            return '"' + $t + '"'
+        }
+        if ($Node -is [ValueType]) { return [string]$Node }
+        if ($Depth -gt 6) { return '...' }
+        if ($Node -is [array]) {
+            if ($Node.Count -eq 0) { return '[]' }
+            return "[$($Node.Count): " + (& $sketch $Node[0] ($Depth + 1)) + ']'
+        }
+        if ($Node -is [psobject]) {
+            $parts = @()
+            $i = 0
+            foreach ($p in $Node.PSObject.Properties) {
+                if ($i -ge 30) { $parts += '...'; break }
+                $parts += ($p.Name + ':' + (& $sketch $p.Value ($Depth + 1)))
+                $i++
+            }
+            return '{' + ($parts -join ', ') + '}'
+        }
+        return [string]$Node
+    }
+
+    try {
+        $parsed = @(ConvertFrom-LenovoJsonList -Text $Text)
+        $out = if ($parsed.Count -eq 1) { & $sketch $parsed[0] 0 } else { & $sketch $parsed 0 }
+    } catch {
+        $out = 'unreadable JSON'
+    }
+    if ($out.Length -gt $MaxLength) { $out = $out.Substring(0, $MaxLength) + '...' }
+    return $out
+}
+
+
+function Get-LenovoCruTiers {
+    <#
+        Reads the CRU tier codes out of whatever parts/config answered: the
+        first list found under a key mentioning "cru", taking each entry's
+        value/code/id (or the entry itself when it is a bare string).
+    #>
+    [CmdletBinding()]
+    param([string] $ConfigText)
+
+    if (-not $ConfigText) { return @() }
+    try { $parsed = @(ConvertFrom-LenovoJsonList -Text $ConfigText) } catch { return @() }
+
+    $hits = New-Object System.Collections.Generic.List[object]
+    $find = $null
+    $find = {
+        param($Node, [int] $Depth)
+        if ($null -eq $Node -or $Depth -gt 8 -or $hits.Count -gt 0) { return }
+        if ($Node -is [string] -or $Node -is [ValueType]) { return }
+        if ($Node -is [array]) { foreach ($i in $Node) { & $find $i ($Depth + 1) }; return }
+        if ($Node -is [psobject]) {
+            foreach ($p in $Node.PSObject.Properties) {
+                if ($p.Name -match '(?i)cru' -and $p.Value -is [array] -and $p.Value.Count -gt 0) { [void]$hits.Add($p.Value); return }
+            }
+            foreach ($p in $Node.PSObject.Properties) { & $find $p.Value ($Depth + 1) }
+        }
+    }
+    & $find $parsed 0
+    if ($hits.Count -eq 0) { return @() }
+    $found = $hits[0]
+
+    $tiers = foreach ($entry in $found) {
+        if ($null -eq $entry) { continue }
+        if ($entry -is [string] -or $entry -is [ValueType]) { [string]$entry; continue }
+        $v = $null
+        foreach ($k in 'value', 'code', 'id', 'key', 'tier', 'cruTier', 'name') {
+            if ($entry.PSObject.Properties[$k] -and $null -ne $entry.$k -and [string]$entry.$k) { $v = [string]$entry.$k; break }
+        }
+        if ($v) { $v }
+    }
+    return @($tiers | Where-Object { $_ } | Select-Object -Unique)
+}
+
+
 function Read-LenovoPartsPayload {
     <#
         Works out what kind of thing came back - spreadsheet, JSON, CSV, a web
@@ -1178,20 +1269,57 @@ function Get-LenovoPartsList {
         $pageUrl  = "$($script:SiteBase)/us/en/products/$($product.ProductId)/parts"
         $xhr      = @{ 'X-Requested-With' = 'XMLHttpRequest'; 'Origin' = $script:SiteBase }
 
-        # The body the parts page itself posts (seen in its scripts), sent to
-        # the page's own endpoints in turn: as-built is the list for this very
-        # serial, model and compatible are broader fallbacks, and the page's
-        # "Download parts list" export is the last resort. What each one
-        # answered is kept in Raw.
-        $apiBody  = '{"serialId":"' + $fields.serialId + '","mtId":"' + $fields.mtId + '","model":"' + $fields.model + '"}'
-        $attempts = @(
-            @{ Name = 'POST parts/asBuilt';                 Method = 'POST'; Url = "$($script:PartsApiBase)/asBuilt";    Body = $apiBody }
-            @{ Name = 'POST parts/model';                   Method = 'POST'; Url = "$($script:PartsApiBase)/model";      Body = $apiBody }
-            @{ Name = 'POST parts/compatible';              Method = 'POST'; Url = "$($script:PartsApiBase)/compatible"; Body = $apiBody }
-            @{ Name = 'POST parts/export with query string'; Method = 'POST'; Url = $script:PartsExportUrl + $query;      Body = '' }
-        )
+        # The body the parts page itself posts, read out of its scripts. The
+        # page also sends the CRU tiers it is filtering on; those come from
+        # parts/config when it lists them, else the usual codings are tried.
+        $base = [ordered]@{
+            serialId       = $fields.serialId
+            mtId           = $fields.mtId
+            model          = $fields.model
+            couponNumber   = ''
+            source         = ''
+            channel        = ''
+            firstGenCPU    = $false
+            fetchProcessor = $true
+        }
+        $withTiers = {
+            param([string[]] $Tiers)
+            $b = [ordered]@{}
+            foreach ($k in $base.Keys) { $b[$k] = $base[$k] }
+            if ($Tiers -and $Tiers.Count -gt 0) { $b['cruTiers'] = @($Tiers) }
+            return (ConvertTo-Json -InputObject $b -Compress -Depth 5)
+        }
 
-        $log     = New-Object System.Collections.Generic.List[string]
+        $log    = New-Object System.Collections.Generic.List[string]
+        $config = Invoke-LenovoRequest -Client $client -Url "$($script:PartsApiBase)/config" -Method POST `
+                                       -Accept $accept -Referer $pageUrl -Headers $xhr -Body '{}'
+        $tiers  = @()
+        if (-not $config.Error -and $config.Text) { $tiers = @(Get-LenovoCruTiers -ConfigText $config.Text) }
+        [void]$log.Add("0. POST parts/config -> HTTP $($config.StatusCode) $($config.ContentType); CRU tiers found: " +
+                       $(if ($tiers.Count -gt 0) { $tiers -join ',' } else { 'none' }) +
+                       $(if ($config.Text -and $config.Text -match '^\s*[\[{]') { '; shape: ' + (Get-LenovoJsonShape -Text $config.Text -MaxLength 500) } else { '' }))
+
+        $tierSets = New-Object System.Collections.Generic.List[object]
+        [void]$tierSets.Add(@())                                           # exactly what was observed first
+        if ($tiers.Count -gt 0) { [void]$tierSets.Add($tiers) }            # what the site's config lists
+        foreach ($guess in @(@('1', '2', '3'), @('S', 'O', 'N'))) {        # the usual codings
+            if (-not ($tierSets | Where-Object { ($_ -join ',') -eq ($guess -join ',') })) { [void]$tierSets.Add($guess) }
+        }
+        $bestTiers = if ($tiers.Count -gt 0) { $tiers } else { @('1', '2', '3') }
+
+        # As-built is the list for this very serial, so every tier coding is
+        # tried there first; model and compatible are broader fallbacks, and
+        # the page's "Download parts list" export is the last resort. What
+        # each one answered is kept in Raw.
+        $attempts = @()
+        foreach ($set in $tierSets) {
+            $label = if ($set.Count -gt 0) { " with cruTiers $($set -join ',')" } else { '' }
+            $attempts += @{ Name = "POST parts/asBuilt$label"; Method = 'POST'; Url = "$($script:PartsApiBase)/asBuilt"; Body = (& $withTiers $set) }
+        }
+        $attempts += @{ Name = "POST parts/model with cruTiers $($bestTiers -join ',')";      Method = 'POST'; Url = "$($script:PartsApiBase)/model";      Body = (& $withTiers $bestTiers) }
+        $attempts += @{ Name = "POST parts/compatible with cruTiers $($bestTiers -join ',')"; Method = 'POST'; Url = "$($script:PartsApiBase)/compatible"; Body = (& $withTiers $bestTiers) }
+        $attempts += @{ Name = 'POST parts/export with query string';                        Method = 'POST'; Url = $script:PartsExportUrl + $query + '&cruTiers=' + [Uri]::EscapeDataString($bestTiers -join ','); Body = '' }
+
         $payload = $null
         $n = 0
         foreach ($a in $attempts) {
@@ -1214,27 +1342,35 @@ function Get-LenovoPartsList {
                 $payload = $read
                 break
             }
-            [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($resp.ContentType): $($read.Reason)")
+            $detail = ''
+            if ($read.Source -eq 'json' -and $read.Reason -notmatch '^Lenovo said') {
+                # What came back, sketched, so an unexpected layout is visible
+                # in the diagnostics rather than a dead end.
+                $detail = '; shape: ' + (Get-LenovoJsonShape -Text $resp.Text)
+            }
+            [void]$log.Add("$n. $($a['Name']) -> HTTP $($resp.StatusCode) $($resp.ContentType): $($read.Reason)$detail")
         }
         $out.Raw = ($log -join "`n")
 
         if (-not $payload) {
-            # The first attempt is the site's own request shape, so its answer
-            # is the one worth repeating; the rest are in Raw.
-            $first = [string]$log[0]
-            if ($first -match 'not a parts list: (.+)$')     { $out.Error = "Lenovo refused the parts list: $($Matches[1])" }
-            elseif ($first -match 'Lenovo said: (.+)$')      { $out.Error = "Lenovo said: $($Matches[1])" }
-            elseif ($first -match 'a web page')              { $out.Error = 'Lenovo returned a web page instead of a parts list' }
-            elseif ($first -match '-> (Request failed.*)$')  { $out.Error = $Matches[1] }
-            elseif ($first -match '-> HTTP (\d+)')           { $out.Error = "Lenovo did not return a parts list (HTTP $($Matches[1]))" }
-            else                                             { $out.Error = 'Lenovo did not return a parts list' }
+            # The first real attempt is the site's own request shape, so its
+            # answer is the one worth repeating; the rest are in Raw.
+            $first = [string]$log[1]
+            if ($first -match 'not a parts list: (.+)$')        { $out.Error = "Lenovo refused the parts list: $($Matches[1])" }
+            elseif ($first -match 'Lenovo said: (.+)$')         { $out.Error = "Lenovo said: $($Matches[1])" }
+            elseif ($first -match 'no part rows in the json')   { $out.Error = 'Lenovo returned no parts for this serial' }
+            elseif ($first -match 'a web page')                 { $out.Error = 'Lenovo returned a web page instead of a parts list' }
+            elseif ($first -match '-> (Request failed.*)$')     { $out.Error = $Matches[1] }
+            elseif ($first -match '-> HTTP (\d+)')              { $out.Error = "Lenovo did not return a parts list (HTTP $($Matches[1]))" }
+            else                                                { $out.Error = 'Lenovo did not return a parts list' }
             return [pscustomobject]$out
         }
 
+        # Raw keeps the attempt log even on success, so the diagnostics can
+        # say which shape worked; the GUI only shows it on failure.
         $out.Source = $payload.Source
         $out.Parts  = @(ConvertTo-LenovoPartRows -Record $payload.Records)
         if ($out.Parts.Count -eq 0) { $out.Error = 'No parts listed for this serial' }
-        else { $out.Raw = '' }
     } catch {
         $out.Error = "Could not read the parts list: $($_.Exception.Message)"
     } finally {
@@ -1280,8 +1416,8 @@ function Find-LenovoPartsEndpoint {
         foreach ($c in $ctx) { [void]$lines.Add("  [$Label] upsellAggregation context: " + (($c -replace '\s+', ' ').Trim())) }
         # The calls the tool relies on, with enough around them to read the
         # whole request body and anything the export wants (cruTiers).
-        foreach ($kw in 'parts/asBuilt', 'parts/model"', 'parts/compatible', 'parts/export', 'cruTiers') {
-            $near = @([regex]::Matches($Text, '.{0,300}' + [regex]::Escape($kw) + '.{0,600}') | ForEach-Object { $_.Value } | Select-Object -First 4)
+        foreach ($kw in 'parts/asBuilt', 'parts/export', 'cruTier', 'exportPartsCruTiers', 'userCart.source', 'userCart =', 'userCart={') {
+            $near = @([regex]::Matches($Text, '(?i).{0,300}' + [regex]::Escape($kw) + '.{0,700}') | ForEach-Object { $_.Value } | Select-Object -First 8)
             foreach ($c in $near) { [void]$lines.Add("  [$Label] near $kw`: " + (($c -replace '\s+', ' ').Trim())) }
         }
     }
@@ -1295,6 +1431,16 @@ function Find-LenovoPartsEndpoint {
         [void]$lines.Add("Product: $($product.Product) | type $($product.MachineType) | model $($product.Model) | id $($product.ProductId)")
 
         $pageUrl = "$($script:SiteBase)/us/en/products/$($product.ProductId)/parts"
+
+        # The page's configuration call, in full: it is where the CRU tier
+        # codes and any other filter values the parts calls expect would be.
+        $xhr    = @{ 'X-Requested-With' = 'XMLHttpRequest'; 'Origin' = $script:SiteBase }
+        $config = Invoke-LenovoRequest -Client $client -Url "$($script:PartsApiBase)/config" -Method POST `
+                                       -Accept 'application/json, */*' -Referer $pageUrl -Headers $xhr -Body '{}'
+        $cfgText = ($config.Text -replace '\s+', ' ').Trim()
+        if ($cfgText.Length -gt 3000) { $cfgText = $cfgText.Substring(0, 3000) + '...' }
+        [void]$lines.Add("parts/config -> HTTP $($config.StatusCode) $($config.ContentType) $($config.Error): $cfgText")
+
         $page    = Invoke-LenovoRequest -Client $client -Url $pageUrl -Accept 'text/html, */*'
         [void]$lines.Add("Parts page: $pageUrl -> HTTP $($page.StatusCode) $($page.ContentType), $($page.Bytes.Length) bytes $($page.Error)")
         if (-not $page.Text) { return $lines.ToArray() }
@@ -1421,4 +1567,5 @@ Export-ModuleMember -Function Get-LenovoWarranty, ConvertTo-SerialList,
                               ConvertTo-LenovoPartRows, ConvertFrom-LenovoXlsx,
                               ConvertFrom-LenovoDelimited, ConvertFrom-LenovoPartsJson,
                               ConvertFrom-LenovoJsonList, Read-LenovoPartsPayload,
-                              Find-LenovoPartsEndpoint, Get-LenovoPartsDiagnostic
+                              Find-LenovoPartsEndpoint, Get-LenovoPartsDiagnostic,
+                              Get-LenovoJsonShape, Get-LenovoCruTiers

@@ -206,9 +206,12 @@ POST https://pcsupport.lenovo.com/us/en/api/v4/upsellAggregation/parts/asBuilt
 
 is the call the parts page itself makes when it shows "parts for your serial
 number" — found by scanning the scripts the page loads. "As built" is the
-parts list for that exact machine. If it declines, the same body goes to
-`parts/model` (every part for the model) and then `parts/compatible`, and the
-page's **Download parts list** export is the last resort.
+parts list for that exact machine. The page also sends the CRU tiers it is
+filtering on (self-service, optional-service, FRU), so the tool first asks
+`parts/config` for the tier codes and sends those, falling back to the usual
+codings. If as-built declines, the same body goes to `parts/model` (every part
+for the model) and then `parts/compatible`, and the page's **Download parts
+list** export is the last resort.
 
 The JSON reader does not assume a layout: it walks whatever comes back and
 keeps every object carrying a part number, so a bare list, a list under
